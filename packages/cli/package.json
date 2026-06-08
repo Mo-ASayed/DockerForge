@@ -1,0 +1,47 @@
+{
+  "name": "@dockerforge/cli",
+  "version": "0.1.1",
+  "description": "DockerForge CLI: generate production-grade Dockerfiles, .dockerignore, and Compose from a local project, and lint Dockerfiles (human/JSON/SARIF). Offline.",
+  "license": "Apache-2.0",
+  "author": "Docker Forge",
+  "homepage": "https://containerise.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mo-ASayed/DockerForge.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/Mo-ASayed/DockerForge/issues"
+  },
+  "bin": {
+    "dockerforge": "src/index.js"
+  },
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "docker",
+    "dockerfile",
+    "containerize",
+    "cli",
+    "generator",
+    "lint",
+    "sarif"
+  ],
+  "dependencies": {
+    "@dockerforge/core": "^0.1.1",
+    "commander": "^12.1.0"
+  }
+}

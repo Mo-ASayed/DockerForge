@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# build output and coverage
+dist/
+coverage/
+
+# logs
+*.log
+npm-debug.log*
+
+# packaged tarballs (created by npm pack / npm publish)
+*.tgz
+
+# secrets and local config — never commit
+.env
+.env.*
+.npmrc
+
+# editor and OS noise
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,17 @@
+{
+  "name": "test-yarn-app",
+  "version": "1.0.0",
+  "description": "Test Node.js application with Yarn",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "build": "webpack"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "webpack": "^5.88.0"
+  }
+}

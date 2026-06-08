@@ -1,0 +1,44 @@
+{
+  "name": "@dockerforge/core",
+  "version": "0.1.1",
+  "description": "DockerForge engine: analyse a local project and generate production-grade Dockerfiles, .dockerignore, and Compose, and lint Dockerfiles. Offline, no network.",
+  "license": "Apache-2.0",
+  "author": "Docker Forge",
+  "homepage": "https://containerise.dev",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Mo-ASayed/DockerForge.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/Mo-ASayed/DockerForge/issues"
+  },
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "docker",
+    "dockerfile",
+    "containerize",
+    "generator",
+    "lint",
+    "sarif"
+  ],
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "fs-extra": "^11.2.0",
+    "glob": "^10.3.10"
+  }
+}
