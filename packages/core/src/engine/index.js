@@ -138,8 +138,11 @@ function toSimpleDockerfile(dockerfile) {
   return dockerfile.split('\n').map(line => {
     const isRun = /^RUN\s/.test(line);
     if (!isRun) return line;
-    // Strip --mount=type=cache,... and --mount=type=secret,...
-    line = line.replace(/--mount=type=\w+,\S+\s+/g, '');
+    // Strip only --mount=type=cache,... (a pure build-speed optimisation).
+    // KEEP --mount=type=secret,... — for private/scoped registries it's the only way the
+    // default Dockerfile can authenticate (e.g. `docker build --secret id=npmrc,src=.npmrc`).
+    // An unsupplied secret mount is a no-op, so this is safe even when no secret is passed.
+    line = line.replace(/--mount=type=cache,\S+\s+/g, '');
     return line;
   }).join('\n');
 }

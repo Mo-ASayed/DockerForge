@@ -697,13 +697,23 @@ function generateNodeRoot(a, envVars = [], rootConfigFiles = []) {
     // Build with `next build`, then run `next start` on a lean Node runtime. Serving the
     // .next output via a generic static server would break SSR, API routes, and dynamic rendering.
     if (a.framework === 'nextjs') {
-      const prodInstall = nodeInstallLine(a.packageManager, true, { hasScopedPackages: a.hasScopedPackages });
       const nextSrcCopy = nextSourceCopyBlock(a, rootConfigFiles);
       const hasPublic = Array.isArray(a.sourceDirs) && a.sourceDirs.includes('public');
       const publicCopy = hasPublic ? `COPY --from=builder /app/public ./public\n` : '';
       const runtimeConfigCopy = a.nextRuntimeConfig
         ? `COPY --from=builder /app/${a.nextRuntimeConfig} ./${a.nextRuntimeConfig}\n`
         : '';
+      // Prune dev deps to production IN THE BUILDER, then copy node_modules into the runtime
+      // stage. This avoids a second install at runtime — which would re-hit the registry (and,
+      // for private/scoped packages, need the npmrc secret a second time). The builder already
+      // fetched and authenticated everything; pruning just drops the dev-only packages.
+      const secretMount = a.hasScopedPackages ? '--mount=type=secret,id=npmrc,target=/root/.npmrc ' : '';
+      const prodPrune =
+        a.packageManager === 'pnpm' ? 'RUN pnpm prune --prod'
+        : a.packageManager === 'yarn' ? `RUN ${secretMount}yarn install --frozen-lockfile --production --ignore-scripts && yarn cache clean`
+        : 'RUN npm prune --omit=dev';
+      // node images ship npm + yarn, but not pnpm — install it in the runtime stage if needed.
+      const runtimePmSetup = a.packageManager === 'pnpm' ? `RUN ${installPnpmGlobalCmd()}\n` : '';
 
       dockerfile = `
 # ─── Stage 1: Build ───────────────────────────────────────
@@ -718,6 +728,9 @@ ${buildInstall}
 ${nextSrcCopy}
 RUN ${buildPrefix}${a.buildCommand}
 
+# Drop dev dependencies so only production node_modules carry into the runtime image
+${prodPrune}
+
 # ─── Stage 2: Runtime ─────────────────────────────────────
 FROM ${baseImage}
 
@@ -725,10 +738,10 @@ WORKDIR /app
 
 ${buildEnvBlock(envVars)}
 
-COPY ${a.lockFile} package.json ./
-${prodInstall}
-
-# Next.js runs as a Node server; copy the build output, static assets, and the config it reads at runtime
+# Next.js runs as a Node server. Copy production deps + build output from the builder —
+# no second install here, so the (often private) registry is only contacted once, in the builder.
+${runtimePmSetup}COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/${buildOut} ./${buildOut}
 ${publicCopy}${runtimeConfigCopy}${runtimeUserBlock(true)}
 
@@ -738,8 +751,11 @@ ${simpleHttpHealthcheck(a.port)}
 CMD ${startCmdJson}`.trim();
 
       improvements.push('Next.js is built and run as a Node server (next start) so SSR and API routes work — a generic static server image would break them.');
-      improvements.push('Smaller image option: set `output: "standalone"` in next.config, then copy .next/standalone + .next/static instead of installing node_modules.');
+      improvements.push('Production node_modules are copied from the build stage (deps fetched once). For an even smaller image, set `output: "standalone"` in next.config and copy .next/standalone + .next/static.');
       improvements.push('Only known framework config files are auto-copied — verify any project-specific build config is also COPYed (e.g. sentry.*.config.ts, next-i18next.config).');
+      if (a.hasScopedPackages) {
+        improvements.push('Scoped packages detected (may include a private registry): the install keeps a secret mount — build with `docker build --secret id=npmrc,src=.npmrc .` and a .npmrc that authenticates your scope.');
+      }
       improvements.push('HEALTHCHECK probes /health, which Next.js does not expose by default — add a health route or point the healthcheck at an existing path.');
       return { dockerfile, dockerignore: nodeDockerignore(), improvements };
     }
