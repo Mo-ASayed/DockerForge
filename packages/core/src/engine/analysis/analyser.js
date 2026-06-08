@@ -707,6 +707,36 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
   // Role
   const role = await detectRole(projectPath, pkg);
 
+  // Detect which conventional source directories actually exist on disk, so the
+  // generator copies real directories instead of guessing the layout (e.g. app/ vs src/).
+  const SOURCE_DIR_CANDIDATES = [
+    'src', 'app', 'pages', 'components', 'lib', 'styles',
+    'public', 'server', 'config', 'content', 'i18n', 'locales', 'hooks', 'utils',
+  ];
+  const sourceDirs = [];
+  for (const d of SOURCE_DIR_CANDIDATES) {
+    try { if ((await fs.stat(path.join(projectPath, d))).isDirectory()) sourceDirs.push(d); }
+    catch { /* absent */ }
+  }
+
+  // Detect framework build/runtime config files that exist, so we copy real filenames
+  // instead of guessing a single hard-coded one. Next.js also reads its config at runtime.
+  const FRAMEWORK_CONFIG_CANDIDATES = [
+    'next.config.js', 'next.config.mjs', 'next.config.cjs', 'next.config.ts',
+    'tailwind.config.js', 'tailwind.config.ts', 'tailwind.config.cjs', 'tailwind.config.mjs',
+    'components.json', 'jsconfig.json',
+    'remix.config.js', 'svelte.config.js', 'nuxt.config.ts', 'nuxt.config.js',
+  ];
+  const frameworkConfigFiles = [];
+  for (const f of FRAMEWORK_CONFIG_CANDIDATES) {
+    try { if ((await fs.stat(path.join(projectPath, f))).isFile()) frameworkConfigFiles.push(f); }
+    catch { /* absent */ }
+  }
+  // The config Next.js reads on `next start` (first match wins) — must be in the runtime image.
+  const nextRuntimeConfig = framework === 'nextjs'
+    ? (frameworkConfigFiles.find(f => f.startsWith('next.config.')) || null)
+    : null;
+
   // Detect sibling directories referenced via require('../xxx') in the entry point.
   // These are root-level dirs that sit alongside the service dir and must be COPYed
   // into the image so cross-directory requires resolve at runtime.
@@ -731,6 +761,9 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
     rootBuildDeps,   // root-level dirs imported by vite config via '../dirname' — must be copied before build
     hasScopedPackages,
     siblingDeps,     // root-level dirs referenced via require('../xxx') — must be COPYed into runtime image
+    sourceDirs,           // conventional source dirs that actually exist on disk (real, not guessed)
+    frameworkConfigFiles, // framework build/runtime config files present (next.config, tailwind.config, ...)
+    nextRuntimeConfig,    // the next.config.* file Next.js reads at runtime, or null
     assumptions,
   };
 }

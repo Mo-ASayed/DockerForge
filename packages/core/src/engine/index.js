@@ -132,7 +132,7 @@ function applyValidationEvidence(confidenceResult, validation) {
 
 /**
  * Strip BuildKit-specific features from a Dockerfile to produce the simple default output.
- * The full version (with mounts, CRA flags, etc.) becomes powerDockerfile.
+ * Build environment prefixes stay in both outputs because they are part of the recipe.
  */
 function toSimpleDockerfile(dockerfile) {
   return dockerfile.split('\n').map(line => {
@@ -140,11 +140,6 @@ function toSimpleDockerfile(dockerfile) {
     if (!isRun) return line;
     // Strip --mount=type=cache,... and --mount=type=secret,...
     line = line.replace(/--mount=type=\w+,\S+\s+/g, '');
-    // Strip CRA build environment prefix (CI=false GENERATE_SOURCEMAP=false ...)
-    line = line.replace(
-      /^(RUN\s+)CI=false GENERATE_SOURCEMAP=false NODE_OPTIONS=--max-old-space-size=\d+ DISABLE_ESLINT_PLUGIN=true\s+/,
-      '$1'
-    );
     return line;
   }).join('\n');
 }

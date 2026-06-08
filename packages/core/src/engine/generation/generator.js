@@ -6,8 +6,12 @@ const path = require('path');
 const { STACKS, BASE_IMAGES } = require('../constants');
 const { isSecretLikeEnvKey, isSecretLikeEnvValue } = require('../security/security');
 
-const STATIC_RUNTIME_IMAGE = 'nginx:1.27-alpine';
 const PNPM_VERSION = '9';
+const STATIC_SERVER_PACKAGE = 'serve@14.2.4';
+
+// Frameworks that produce a long-running Node server (SSR, API routes, dynamic rendering).
+// These run with `next start` / a framework server instead of a generic static file server.
+const SERVER_RENDERED_FRAMEWORKS = new Set(['nextjs', 'remix', 'sveltekit', 'nuxt']);
 
 function installPnpmGlobalCmd() {
   return `npm install -g pnpm@${PNPM_VERSION}`;
@@ -32,39 +36,20 @@ function runtimeStartCmd(a) {
   return ['node', `${buildOut}/${entry.replace(/^\.\//, '')}`];
 }
 
-function nginxStaticServerBlock(port) {
-  return 'COPY nginx.conf /etc/nginx/conf.d/default.conf';
-}
+function staticServeRuntimeStage(baseImage, port, buildAssetCopyLine, outputDir) {
+  return `FROM ${baseImage}
 
-function nginxConf(port) {
-  return `server {
-    listen ${port};
-    root /usr/share/nginx/html;
-    index index.html;
+WORKDIR /app
 
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-Content-Type-Options "nosniff";
-    add_header Referrer-Policy "strict-origin-when-cross-origin";
+ENV NODE_ENV=production
 
-    location ~* \\.(js|css|png|jpg|jpeg|gif|ico|svg|woff2)$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-    }
+RUN npm install -g ${STATIC_SERVER_PACKAGE} && npm cache clean --force
+${buildAssetCopyLine}
+USER node
 
-    location /health { return 200 "ok"; add_header Content-Type text/plain; }
-    location / { try_files $uri $uri/ /index.html; }
-
-    gzip on;
-    gzip_types text/plain text/css application/json application/javascript
-               text/xml application/xml image/svg+xml font/woff2 application/manifest+json;
-}`.trim();
-}
-
-function nginxNonRootPrepBlock() {
-  return [
-    'RUN mkdir -p /var/cache/nginx/client_temp /var/cache/nginx/proxy_temp /var/cache/nginx/fastcgi_temp /var/cache/nginx/uwsgi_temp /var/cache/nginx/scgi_temp',
-    'RUN touch /var/run/nginx.pid && chown -R nginx:nginx /var/cache/nginx /var/run/nginx.pid /var/log/nginx /etc/nginx/conf.d /usr/share/nginx/html',
-  ].join('\n');
+EXPOSE ${port}
+${simpleHttpHealthcheck(port)}
+CMD ["serve", "-s", "${outputDir}", "-l", "${port}"]`;
 }
 
 function simpleHttpHealthcheck(port) {
@@ -189,6 +174,22 @@ function nodeSourceCopyBlock(a, configCopyLine = '', frontendAssetCopyLine = '')
   return blocks.join('\n');
 }
 
+// Build-stage source copy for Next.js. Copies the config files and source directories that
+// actually exist on disk (detected by the analyser) instead of guessing app/ vs src/.
+function nextSourceCopyBlock(a, rootConfigFiles = []) {
+  const lines = [];
+  const configFiles = [...new Set([
+    ...rootConfigFiles.filter(f => !['package.json', a.lockFile].includes(f)),
+    ...(a.frameworkConfigFiles || []),
+  ])];
+  if (configFiles.length > 0) lines.push(`COPY ${configFiles.join(' ')} ./`);
+  const dirs = (Array.isArray(a.sourceDirs) && a.sourceDirs.length > 0)
+    ? a.sourceDirs
+    : ['app', 'pages', 'components', 'public']; // fallback only if nothing was detected
+  for (const d of dirs) lines.push(`COPY ${d}/ ./${d}/`);
+  return lines.join('\n');
+}
+
 function pythonBuilderImage(a) {
   return a.hasNativeDeps ? `python:${a.version}` : BASE_IMAGES[STACKS.PYTHON](a.version);
 }
@@ -273,6 +274,9 @@ function buildEnvBlock(envVars) {
 }
 
 function buildCommandPrefix(service) {
+  // Server-rendered frameworks (Next.js, Remix, ...) run their own build; the CRA-specific
+  // env prefix (DISABLE_ESLINT_PLUGIN etc.) does not apply and just adds noise.
+  if (SERVER_RENDERED_FRAMEWORKS.has(service.framework)) return '';
   // Fire for CRA regardless of how detection landed — framework='cra', role='frontend',
   // or any build command that invokes react-scripts directly.
   const isReactScripts =
@@ -668,8 +672,7 @@ ENTRYPOINT ["dotnet", "${be.projectName}.dll"]`.trim());
   }
   improvements.push('HEALTHCHECK should probe /health for each runtime service; add a /health endpoint returning 2xx where missing');
 
-  const collectedNginxConf = frontends.length > 0 ? nginxConf(frontends[0].port) : undefined;
-  return { dockerfile, dockerignore, improvements, nginxConf: collectedNginxConf };
+  return { dockerfile, dockerignore, improvements };
 }
 
 // ── Node at root (original behaviour) ───────────────────────────────────────
@@ -690,10 +693,64 @@ function generateNodeRoot(a, envVars = [], rootConfigFiles = []) {
     const buildOut = a.buildOutputDir || 'dist';
     const sourceCopyBlock = nodeSourceCopyBlock(a, configCopyLine, frontendAssetCopyLine);
 
-    // CRA / pure-frontend: runtime is a static file server, not a Node app.
+    // Next.js (and other SSR frameworks): a Node server, NOT a static site.
+    // Build with `next build`, then run `next start` on a lean Node runtime. Serving the
+    // .next output via a generic static server would break SSR, API routes, and dynamic rendering.
+    if (a.framework === 'nextjs') {
+      const prodInstall = nodeInstallLine(a.packageManager, true, { hasScopedPackages: a.hasScopedPackages });
+      const nextSrcCopy = nextSourceCopyBlock(a, rootConfigFiles);
+      const hasPublic = Array.isArray(a.sourceDirs) && a.sourceDirs.includes('public');
+      const publicCopy = hasPublic ? `COPY --from=builder /app/public ./public\n` : '';
+      const runtimeConfigCopy = a.nextRuntimeConfig
+        ? `COPY --from=builder /app/${a.nextRuntimeConfig} ./${a.nextRuntimeConfig}\n`
+        : '';
+
+      dockerfile = `
+# ─── Stage 1: Build ───────────────────────────────────────
+${builderFrom(baseImage, 'builder')}
+
+WORKDIR /app
+
+COPY ${a.lockFile} package.json ./
+${buildInstall}
+
+# Copy source and build-time config
+${nextSrcCopy}
+RUN ${buildPrefix}${a.buildCommand}
+
+# ─── Stage 2: Runtime ─────────────────────────────────────
+FROM ${baseImage}
+
+WORKDIR /app
+
+${buildEnvBlock(envVars)}
+
+COPY ${a.lockFile} package.json ./
+${prodInstall}
+
+# Next.js runs as a Node server; copy the build output, static assets, and the config it reads at runtime
+COPY --from=builder /app/${buildOut} ./${buildOut}
+${publicCopy}${runtimeConfigCopy}${runtimeUserBlock(true)}
+
+${nodeStopSignalBlock()}
+EXPOSE ${a.port}
+${simpleHttpHealthcheck(a.port)}
+CMD ${startCmdJson}`.trim();
+
+      improvements.push('Next.js is built and run as a Node server (next start) so SSR and API routes work — a generic static server image would break them.');
+      improvements.push('Smaller image option: set `output: "standalone"` in next.config, then copy .next/standalone + .next/static instead of installing node_modules.');
+      improvements.push('Only known framework config files are auto-copied — verify any project-specific build config is also COPYed (e.g. sentry.*.config.ts, next-i18next.config).');
+      improvements.push('HEALTHCHECK probes /health, which Next.js does not expose by default — add a health route or point the healthcheck at an existing path.');
+      return { dockerfile, dockerignore: nodeDockerignore(), improvements };
+    }
+
+    // CRA / pure-frontend SPA: runtime is a static file server, not a Node app.
     // react-scripts is a devDep — it won't be present after --production install,
-    // and react-scripts start is a dev server anyway.
-    if (a.role === 'frontend' || a.framework === 'cra') {
+    // and react-scripts start is a dev server anyway. Server-rendered frameworks are
+    // explicitly excluded so they never get the static-file-server treatment.
+    const isStaticSpa = (a.role === 'frontend' || a.framework === 'cra')
+      && !SERVER_RENDERED_FRAMEWORKS.has(a.framework);
+    if (isStaticSpa) {
       dockerfile = `
 # ─── Stage 1: Build ───────────────────────────────────────
 ${builderFrom(baseImage, 'builder')}
@@ -708,18 +765,11 @@ ${sourceCopyBlock}
 RUN ${buildPrefix}${a.buildCommand}
 
 # ─── Stage 2: Runtime ─────────────────────────────────────
-FROM ${STATIC_RUNTIME_IMAGE}
-
-COPY --from=builder /app/${buildOut} /usr/share/nginx/html
-${nginxStaticServerBlock(a.port)}
-
-EXPOSE ${a.port}
-${simpleHttpHealthcheck(a.port)}
-CMD ["nginx", "-g", "daemon off;"]`.trim();
+${staticServeRuntimeStage(baseImage, a.port, `COPY --from=builder /app/${buildOut} ./${buildOut}`, buildOut)}`.trim();
 
       const validationDockerfile = dockerfile;
-      improvements.push(`Frontend-only: built then served with ${STATIC_RUNTIME_IMAGE}. No Node runtime or node_modules in final image.`);
-      return withValidationVariant({ dockerfile, dockerignore: nodeDockerignore(), nginxConf: nginxConf(a.port), improvements }, validationDockerfile);
+      improvements.push(`Frontend-only: built then served with ${STATIC_SERVER_PACKAGE} as the non-root node user.`);
+      return withValidationVariant({ dockerfile, dockerignore: nodeDockerignore(), improvements }, validationDockerfile);
 
     } else {
       const pruneCmd = nodePruneLine(a.packageManager);
@@ -807,8 +857,9 @@ function generateNodeSub(a, dir, sharedDirs, staticAssets = [], rootConfigFiles 
 
   let dockerfile;
 
-  if (a.hasBuild && a.role === 'frontend') {
-    // Frontend build → serve static via nginx
+  if (a.hasBuild && a.role === 'frontend' && !SERVER_RENDERED_FRAMEWORKS.has(a.framework)) {
+    // Static SPA build → serve the compiled output. Server-rendered frameworks (Next.js, Remix, ...)
+    // are excluded here and fall through to the Node-server runtime branch below.
     const stageName = 'build';
 
     // When lock file is at project root, copy root files + service package.json and
@@ -883,18 +934,11 @@ ${sourceCopy}
 ${sharedConfigCopy}${buildRun}
 
 # ─── Stage 2: Serve ───────────────────────────────────────
-FROM ${STATIC_RUNTIME_IMAGE}
-
-COPY --from=${stageName} ${buildOutput} /usr/share/nginx/html
-${nginxStaticServerBlock(a.port)}
-
-EXPOSE ${a.port}
-${simpleHttpHealthcheck(a.port)}
-CMD ["nginx", "-g", "daemon off;"]`.trim();
+${staticServeRuntimeStage(baseImage, a.port, `COPY --from=${stageName} ${buildOutput} ./${a.buildOutputDir || 'build'}`, a.buildOutputDir || 'build')}`.trim();
 
     const validationDockerfile = dockerfile;
-    improvements.push(`Frontend-only: built then served with ${STATIC_RUNTIME_IMAGE}. If a backend also serves the files, merge into one multi-service build.`);
-    return withValidationVariant({ dockerfile, dockerignore: nodeDockerignore(), nginxConf: nginxConf(a.port), improvements }, validationDockerfile);
+    improvements.push(`Frontend-only: built then served with ${STATIC_SERVER_PACKAGE} as the non-root node user. If a backend also serves the files, merge into one multi-service build.`);
+    return withValidationVariant({ dockerfile, dockerignore: nodeDockerignore(), improvements }, validationDockerfile);
 
 
   } else {
