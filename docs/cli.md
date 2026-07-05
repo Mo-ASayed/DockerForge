@@ -59,6 +59,7 @@ docker-compose.yml
 | `-o, --output <dir>` | the target path | Directory to write the files into. |
 | `--print` | off | Print the Dockerfile to stdout and write nothing. |
 | `--json` | off | Print a JSON object instead of the human summary. |
+| `--pin-digests` | off | Resolve Docker Hub base-image tags to immutable SHA-256 digests. Makes live registry requests. |
 | `--stack <name>` | auto | Override stack detection, for example `node`, `python`, `dotnet`. |
 | `--port <n>` | auto | Set the exposed port. |
 | `--no-optimise` | on | Skip the optimisation pass. |
@@ -88,6 +89,17 @@ when `NO_COLOR` is set.
 dockerforge generate . --print | docker build -t my-app -f - .
 ```
 
+`--pin-digests` is opt-in. Default generation is offline; this flag contacts Docker Hub to resolve
+base-image tags to immutable manifest digests:
+
+```bash
+dockerforge generate . --pin-digests
+dockerforge generate . --pin-digests --print
+```
+
+Digest-pinned images stay fixed until you update them. Use Docker Scout, Renovate, Dependabot, or
+another update process to refresh base-image digests.
+
 ### Examples
 
 ```bash
@@ -102,6 +114,9 @@ dockerforge generate . --stack python --port 8000
 
 # Inspect the result without writing anything
 dockerforge generate . --print
+
+# Generate with immutable Docker Hub base-image digests
+dockerforge generate . --pin-digests
 ```
 
 After reviewing the generated files, build and run the image:

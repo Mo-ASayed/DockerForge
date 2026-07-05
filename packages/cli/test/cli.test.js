@@ -51,6 +51,15 @@ test('generate --json emits a Dockerfile and confidence', async () => {
   assert.ok(out.dockerignore && out.dockerignore.length > 0, 'should contain a .dockerignore');
 });
 
+test('generate --pin-digests prints digest-pinned Docker Hub base images', async () => {
+  const digest = `sha256:${'e'.repeat(64)}`;
+  const { stdout } = await run('node', [CLI, 'generate', FIXTURE, '--print', '--pin-digests'], {
+    env: { ...process.env, NO_COLOR: '1', DOCKERFORGE_TEST_DIGEST: digest },
+  });
+
+  assert.match(stdout, /FROM .*node:20-alpine3\.21@sha256:e{64}/);
+});
+
 test('generate writes files to --output dir', async () => {
   const outDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dockerforge-cli-'));
   try {

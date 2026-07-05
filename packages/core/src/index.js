@@ -41,17 +41,17 @@ async function ingestLocal(targetPath) {
 /**
  * Run the offline engine pipeline. Only the documented OFFLINE input fields are accepted;
  * remote-ingest fields (gitUrl/zipPath/fileTree/workDir/pat) are deliberately not forwarded.
- * @param {{projectPath: string, hints?: object, optimise?: boolean, security?: boolean, validation?: object|null}} input
+ * @param {{projectPath: string, hints?: object, optimise?: boolean, security?: boolean, validation?: object|null, pinDigests?: boolean, digestResolver?: Function}} input
  * @returns {Promise<object>} EngineResult (see contract Section 2.2)
  */
 async function runDockerfileEngine(input = {}) {
-  const { projectPath, hints, optimise, security, validation } = input;
+  const { projectPath, hints, optimise, security, validation, pinDigests, digestResolver } = input;
   if (!projectPath) {
     throw new errors.IngestError(
       'projectPath is required: @dockerforge/core is offline. Remote ingestion (git URL/zip) lives in the cloud adapter, not core.'
     );
   }
-  return engine.runDockerfileEngine({ projectPath, hints, optimise, security, validation });
+  return engine.runDockerfileEngine({ projectPath, hints, optimise, security, validation, pinDigests, digestResolver });
 }
 
 module.exports = {

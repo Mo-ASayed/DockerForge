@@ -42,6 +42,7 @@ dockerforge generate .                 # write files into the current directory
 dockerforge generate ./app -o ./out    # write into a chosen directory
 dockerforge generate . --print         # print the Dockerfile, write nothing
 dockerforge generate . --json          # JSON output for scripts and CI
+dockerforge generate . --pin-digests   # resolve Docker Hub base images to sha256 digests
 ```
 
 | Flag | Effect |
@@ -49,6 +50,7 @@ dockerforge generate . --json          # JSON output for scripts and CI
 | `-o, --output <dir>` | Write output to this directory. Defaults to the target path. |
 | `--print` | Print the Dockerfile to stdout instead of writing files. |
 | `--json` | Print `{ dockerfile, dockerignore, compose, confidence, improvements }`. |
+| `--pin-digests` | Resolve Docker Hub base-image tags to immutable SHA-256 digests. Makes live registry requests. |
 | `--stack <name>` | Override stack detection (`node`, `python`, `dotnet`, ...). |
 | `--port <n>` | Set the exposed port. |
 | `--no-optimise` | Skip the optimisation pass. |
@@ -57,6 +59,11 @@ dockerforge generate . --json          # JSON output for scripts and CI
 The default output is a coloured summary with the detected services, a confidence score, and any
 warnings. `--json` and `--print` produce plain output with no decoration. Colour turns off when
 the output is not a terminal or when `NO_COLOR` is set.
+
+Default generation is offline. `--pin-digests` is opt-in because it contacts Docker Hub to turn
+base-image tags such as `node:20-alpine3.21` into `node:20-alpine3.21@sha256:...`. Digest-pinned
+images stay fixed until you update them, so pair this with Docker Scout, Renovate, Dependabot, or
+another digest refresh process.
 
 After reviewing the generated files, build and run with Docker:
 

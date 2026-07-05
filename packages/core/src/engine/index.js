@@ -7,6 +7,7 @@ const { optimise } = require('./optimisation/optimiser');
 const { securityPass } = require('./security/security');
 const { buildExplanation } = require('./explanation/explainer');
 const { generateCompose } = require('./generation/composeGenerator');
+const { pinDockerfileDigests } = require('./digestPinning');
 
 function clampScore(score) {
   return Math.max(0, Math.min(1, Number(score.toFixed(2))));
@@ -168,11 +169,36 @@ async function runDockerfileEngine(input = {}) {
     result = optimise(result, primaryService);
   }
 
+  let digestPinningNote = null;
+  if (input.pinDigests === true) {
+    const pinned = await pinDockerfileDigests(result.dockerfile, {
+      resolveDigest: input.digestResolver,
+    });
+    result = {
+      ...result,
+      dockerfile: pinned.dockerfile,
+      validationDockerfile: result.validationDockerfile
+        ? (await pinDockerfileDigests(result.validationDockerfile, {
+          resolveDigest: input.digestResolver,
+        })).dockerfile
+        : result.validationDockerfile,
+    };
+    digestPinningNote = pinned.pinnedImages.length > 0
+      ? `Digest-pinned ${pinned.pinnedImages.length} Docker Hub base image reference${pinned.pinnedImages.length === 1 ? '' : 's'} using live registry data; use an update process to refresh pinned digests.`
+      : 'Digest pinning was requested, but no Docker Hub base image references needed rewriting.';
+  }
+
   const securityNotes = input.security === false ? [] : securityPass(result, primaryService);
   const explanation = buildExplanation(primaryService, result, securityNotes);
-  const improvements = [...securityNotes, ...(result.improvements || []), ...(composeResult.improvements || [])];
+  const improvements = [
+    ...securityNotes,
+    ...(digestPinningNote ? [digestPinningNote] : []),
+    ...(result.improvements || []),
+    ...(composeResult.improvements || []),
+  ];
   const assumptions = collectAssumptions(analysisResult);
   const warnings = buildWarnings({ analysisResult, result, securityNotes });
+  if (digestPinningNote) warnings.push(digestPinningNote);
   const confidence = applyValidationEvidence(
     scoreConfidence({ analysisResult, warnings }),
     input.validation

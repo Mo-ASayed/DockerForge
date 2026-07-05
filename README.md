@@ -62,6 +62,16 @@ To preview the Dockerfile before writing files:
 npx @dockerforge/cli generate ./my-app --print
 ```
 
+To pin Docker Hub base images to immutable SHA-256 digests, opt in with `--pin-digests`:
+
+```bash
+npx @dockerforge/cli generate ./my-app --pin-digests
+```
+
+Default generation is offline. `--pin-digests` makes live Docker Hub registry requests, then writes
+base images like `node:20-alpine3.21@sha256:...`. Digest-pinned images stay fixed until you update
+them, so use Docker Scout, Renovate, Dependabot, or a similar process to refresh base-image digests.
+
 To write the files somewhere else:
 
 ```bash

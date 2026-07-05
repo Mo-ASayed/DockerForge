@@ -46,6 +46,7 @@ program
   .option('--no-security', 'Skip security pass')
   .option('--stack <stack>', 'Hint the stack (node, python, dotnet, ...)')
   .option('--port <port>', 'Hint the exposed port', (v) => parseInt(v, 10))
+  .option('--pin-digests', 'Resolve Docker Hub base-image tags to immutable sha256 digests (network)')
   .option('--json', 'Output JSON {dockerfile, dockerignore, compose, confidence, improvements}')
   .action(async (targetPath, opts) => {
     try {
@@ -61,6 +62,14 @@ program
         hints,
         optimise: opts.optimise,
         security: opts.security,
+        pinDigests: opts.pinDigests,
+        digestResolver: process.env.DOCKERFORGE_TEST_DIGEST
+          ? async (imageRef) => ({
+            original: imageRef,
+            pinned: `${imageRef}@${process.env.DOCKERFORGE_TEST_DIGEST}`,
+            digest: process.env.DOCKERFORGE_TEST_DIGEST,
+          })
+          : undefined,
       });
 
       // --- machine output: keep byte-identical shape to the old CLI for CI use ---
