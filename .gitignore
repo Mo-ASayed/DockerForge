@@ -24,3 +24,7 @@ npm-debug.log*
 
 # local working notes — not part of the published repo
 handover.md
+
+# internal agent planning/spec notes
+docs/superpowers/
+docs/example-parity-report.md
