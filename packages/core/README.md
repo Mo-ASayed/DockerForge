@@ -22,6 +22,9 @@ npm install @dockerforge/core
 
 ## Generate
 
+The supported public API is exported from the package root. Internal files under `src/engine` are
+not part of the compatibility contract.
+
 ```js
 const core = require('@dockerforge/core');
 

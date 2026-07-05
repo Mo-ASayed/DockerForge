@@ -151,25 +151,42 @@ function nodePruneLine(packageManager, cwd = '') {
   return `RUN ${prefix}npm prune --omit=dev`;
 }
 
-function nodeSourceCopyBlock(a, configCopyLine = '', frontendAssetCopyLine = '') {
+function detectedNodeSourceCopyBlock(a) {
+  const lines = [];
+  const sourceFiles = Array.isArray(a.sourceFiles) ? a.sourceFiles : [];
+  const sourceDirs = Array.isArray(a.sourceDirs) ? a.sourceDirs : [];
+  const dirSet = new Set(sourceDirs);
+
+  // Skip a source file that already lives inside a copied source dir — otherwise we emit a
+  // redundant (and mis-located) `COPY src/server.js ./` alongside `COPY src/ ./src/`, which
+  // drops the entry file at /app/server.js where nothing reads it.
+  for (const f of sourceFiles) {
+    const top = f.split('/')[0];
+    if (f.includes('/') && dirSet.has(top)) continue;
+    lines.push(`COPY ${f} ./`);
+  }
+  for (const d of sourceDirs) lines.push(`COPY ${d}/ ./${d}/`);
+
+  if (lines.length === 0) {
+    lines.push('# No conventional source files were detected; add COPY lines for your application code.');
+  }
+
+  return lines.join('\n');
+}
+
+function nodeSourceCopyBlock(a, configCopyLine = '') {
   const blocks = [];
   if (configCopyLine) blocks.push(configCopyLine.trimEnd());
   if (a.framework === 'nextjs') {
-    blocks.push('COPY app/ ./app/');
-    blocks.push('COPY pages/ ./pages/');
-    blocks.push('COPY components/ ./components/');
-    blocks.push('COPY public/ ./public/');
+    blocks.push(detectedNodeSourceCopyBlock(a));
   } else if (a.framework === 'remix') {
-    blocks.push('COPY app/ ./app/');
-    blocks.push('COPY public/ ./public/');
+    blocks.push(detectedNodeSourceCopyBlock(a));
   } else if (['astro', 'vite', 'cra', 'sveltekit'].includes(a.framework)) {
-    if (frontendAssetCopyLine) blocks.push(frontendAssetCopyLine.trimEnd());
-    blocks.push('COPY src/ ./src/');
+    blocks.push(detectedNodeSourceCopyBlock(a));
   } else if (a.framework === 'nestjs') {
-    blocks.push('COPY src/ ./src/');
+    blocks.push(detectedNodeSourceCopyBlock(a));
   } else {
-    blocks.push('# Update these COPY lines if your source is not under src/.');
-    blocks.push('COPY src/ ./src/');
+    blocks.push(detectedNodeSourceCopyBlock(a));
   }
   return blocks.join('\n');
 }
@@ -348,6 +365,8 @@ function generateSingleRoot(a, envVars = [], rootConfigFiles = []) {
   if (a.stack === STACKS.NODE)   return generateNodeRoot(a, envVars, rootConfigFiles);
   if (a.stack === STACKS.PYTHON) return generatePythonRoot(a, rootConfigFiles);
   if (a.stack === STACKS.DOTNET) return generateDotnetRoot(a);
+  if (a.stack === STACKS.GO)     return generateGoRoot(a, '.');
+  if (a.stack === STACKS.RUST)   return generateRustRoot(a, '.');
   throw new Error(`No template for stack: ${a.stack}`);
 }
 
@@ -359,6 +378,8 @@ function generateSingleSub(a, sharedDirs, staticAssets, rootConfigFiles = [], en
   if (a.stack === STACKS.NODE)   return generateNodeSub(a, dir, sharedDirs, staticAssets, rootConfigFiles, envVars, workspacePackageDirs, workspaceSharedConfigs);
   if (a.stack === STACKS.PYTHON) return generatePythonSub(a, dir, sharedDirs, staticAssets);
   if (a.stack === STACKS.DOTNET) return generateDotnetSub(a, dir, sharedDirs);
+  if (a.stack === STACKS.GO)     return generateGoRoot(a, dir);
+  if (a.stack === STACKS.RUST)   return generateRustRoot(a, dir);
   throw new Error(`No template for stack: ${a.stack}`);
 }
 
@@ -681,9 +702,11 @@ function generateNodeRoot(a, envVars = [], rootConfigFiles = []) {
   const baseImage = BASE_IMAGES[STACKS.NODE](a.version);
   const improvements = [];
   const startCmdJson = JSON.stringify(runtimeStartCmd(a));
-  const extraConfigs = rootConfigFiles.filter(f => !['package.json', a.lockFile].includes(f));
+  const extraConfigs = [...new Set([
+    ...rootConfigFiles,
+    ...(a.frameworkConfigFiles || []),
+  ])].filter(f => !['package.json', a.lockFile].includes(f));
   const configCopyLine = extraConfigs.length > 0 ? `COPY ${extraConfigs.join(' ')} ./\n` : '';
-  const frontendAssetCopyLine = (a.role === 'frontend' || a.framework === 'cra') ? 'COPY public/ ./public/\n' : '';
 
   let dockerfile;
 
@@ -691,7 +714,7 @@ function generateNodeRoot(a, envVars = [], rootConfigFiles = []) {
     const buildInstall = nodeInstallLine(a.packageManager, false, { hasScopedPackages: a.hasScopedPackages });
     const buildPrefix = buildCommandPrefix(a);
     const buildOut = a.buildOutputDir || 'dist';
-    const sourceCopyBlock = nodeSourceCopyBlock(a, configCopyLine, frontendAssetCopyLine);
+    const sourceCopyBlock = nodeSourceCopyBlock(a, configCopyLine);
 
     // Next.js (and other SSR frameworks): a Node server, NOT a static site.
     // Build with `next build`, then run `next start` on a lean Node runtime. Serving the
@@ -699,6 +722,57 @@ function generateNodeRoot(a, envVars = [], rootConfigFiles = []) {
     if (a.framework === 'nextjs') {
       const nextSrcCopy = nextSourceCopyBlock(a, rootConfigFiles);
       const hasPublic = Array.isArray(a.sourceDirs) && a.sourceDirs.includes('public');
+
+      // ── output: 'standalone' — smallest, self-contained server bundle ──
+      // `next build` emits .next/standalone (server.js + its own minimal node_modules) plus
+      // .next/static. The runtime copies just those — no install, no full node_modules.
+      if (a.nextStandalone) {
+        const publicCopyStandalone = hasPublic
+          ? `COPY --from=builder --chown=node:node /app/public ./public\n` : '';
+        dockerfile = `
+# ─── Stage 1: Build ───────────────────────────────────────
+${builderFrom(baseImage, 'builder')}
+
+WORKDIR /app
+
+ENV NEXT_TELEMETRY_DISABLED=1
+
+COPY ${a.lockFile} package.json ./
+${buildInstall}
+
+# Copy source and build-time config
+${nextSrcCopy}
+RUN ${buildPrefix}${a.buildCommand}
+
+# ─── Stage 2: Runtime ─────────────────────────────────────
+FROM ${baseImage}
+
+WORKDIR /app
+
+${buildEnvBlock(envVars)}
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV PORT=${a.port}
+ENV HOSTNAME=0.0.0.0
+
+# Self-contained server bundle from output: 'standalone' — no node_modules install needed
+${publicCopyStandalone}COPY --from=builder --chown=node:node /app/${buildOut}/standalone ./
+COPY --from=builder --chown=node:node /app/${buildOut}/static ./${buildOut}/static
+
+USER node
+
+${nodeStopSignalBlock()}
+EXPOSE ${a.port}
+${simpleHttpHealthcheck(a.port)}
+CMD ["node", "server.js"]`.trim();
+
+        improvements.push('Next.js standalone build detected (output: "standalone"): shipped as a self-contained server bundle (.next/standalone) — no node_modules in the runtime image, smallest output.');
+        if (a.hasScopedPackages) {
+          improvements.push('Scoped packages detected (may include a private registry): the build install keeps a secret mount — build with `docker build --secret id=npmrc,src=.npmrc .` and a .npmrc that authenticates your scope.');
+        }
+        improvements.push('HEALTHCHECK probes /health, which Next.js does not expose by default — add a health route or point the healthcheck at an existing path.');
+        return { dockerfile, dockerignore: nodeDockerignore(), improvements };
+      }
+
       const publicCopy = hasPublic ? `COPY --from=builder /app/public ./public\n` : '';
       const runtimeConfigCopy = a.nextRuntimeConfig
         ? `COPY --from=builder /app/${a.nextRuntimeConfig} ./${a.nextRuntimeConfig}\n`
@@ -751,7 +825,7 @@ ${simpleHttpHealthcheck(a.port)}
 CMD ${startCmdJson}`.trim();
 
       improvements.push('Next.js is built and run as a Node server (next start) so SSR and API routes work — a generic static server image would break them.');
-      improvements.push('Production node_modules are copied from the build stage (deps fetched once). For an even smaller image, set `output: "standalone"` in next.config and copy .next/standalone + .next/static.');
+      improvements.push('Production node_modules are copied from the build stage (deps fetched once). For an even smaller image, set `output: "standalone"` in next.config — DockerForge will then emit the self-contained standalone bundle automatically.');
       improvements.push('Only known framework config files are auto-copied — verify any project-specific build config is also COPYed (e.g. sentry.*.config.ts, next-i18next.config).');
       if (a.hasScopedPackages) {
         improvements.push('Scoped packages detected (may include a private registry): the install keeps a secret mount — build with `docker build --secret id=npmrc,src=.npmrc .` and a .npmrc that authenticates your scope.');
@@ -845,14 +919,12 @@ CMD ${startCmdJson}`.trim();
 
   improvements.push('HEALTHCHECK probes /health; add a /health endpoint returning 2xx if your app does not already expose one');
   if (!a.hasBuild) improvements.push('If you add a build step later, use multi-stage builds to keep image small');
-  if (a.framework === null) {
-    improvements.push('WARNING: Unknown Node backend source layout - verify your source is not under src/ before using the generated COPY src/ line.');
+  if ((a.sourceDirs || []).length === 0 && (a.sourceFiles || []).length === 0) {
+    improvements.push('WARNING: No conventional Node source files or directories were detected; add explicit COPY lines for your application code before building.');
   }
   if (a.hasScopedPackages) {
     improvements.push('Scoped packages detected: pass private registry credentials with docker build --secret id=npmrc,src=.npmrc');
   }
-  improvements.push('Verify your source lives in src/ — if not, update the COPY src/ line in the build stage to match your actual source directory.');
-
   improvements.push('Add a SIGTERM handler: process.on(\'SIGTERM\', () => server.close())');
 
   return { dockerfile, dockerignore: nodeDockerignore(), improvements };
@@ -1106,10 +1178,19 @@ function generatePythonRoot(a, rootConfigFiles = []) {
 
   // Explicit source copy — COPY . . is banned.
   // Django: manage.py lives at root; user must add app dirs themselves.
-  // FastAPI/Flask: copy the detected entry point.
+  // FastAPI/Flask/plain: copy the real top-level packages and root modules detected by the
+  // analyser. Copying just the entry file breaks the standard package layout (e.g. app/main.py
+  // started as `uvicorn app.main:app`) — the `app/` package must be present in the image.
+  const pythonSrcLines = [
+    ...(a.pythonRootModules || []).map(m => `COPY ${m} ./`),
+    ...(a.pythonSourceDirs || []).map(d => `COPY ${d}/ ./${d}/`),
+  ];
+  const nonDjangoSourceCopy = pythonSrcLines.length > 0
+    ? pythonSrcLines.join('\n')
+    : `COPY ${a.entryPoint} ./`;
   const sourceCopyBlock = a.framework === 'django'
     ? `COPY manage.py ./\n# TODO: add your Django app directories below, e.g.:\n# COPY myapp/ ./myapp/`
-    : `COPY ${a.entryPoint} ./`;
+    : nonDjangoSourceCopy;
 
   const detectedDjangoCopyBlock = a.framework === 'django' && (a.djangoAppDirs || []).length > 0
     ? `COPY manage.py ./\n${a.djangoAppDirs.map(d => `COPY ${d}/ ./${d}/`).join('\n')}`
@@ -1310,6 +1391,112 @@ ENTRYPOINT ["dotnet", "${a.projectName}.dll"]`.trim();
   return { dockerfile, dockerignore: dotnetDockerignore(), improvements: [] };
 }
 
+// ── Go ───────────────────────────────────────────────────────────────────────
+// Compile a static binary on the toolchain image, ship it on a tiny alpine runtime.
+// Works for a module at the repo root (dir='.') or in a subdirectory.
+
+function generateGoRoot(a, dir = '.') {
+  const buildImage = BASE_IMAGES[STACKS.GO].build(a.version);
+  const runtimeImage = BASE_IMAGES[STACKS.GO].runtime();
+  const p = dir === '.' ? '' : `${dir}/`;
+  const bin = a.binaryName || 'app';
+  const target = a.buildTarget || '.';
+
+  const modCopy = a.hasGoSum ? `COPY ${p}go.mod ${p}go.sum ./` : `COPY ${p}go.mod ./`;
+  const srcCopies = [];
+  if (a.hasRootGoFiles) srcCopies.push(`COPY ${p}*.go ./`);
+  for (const d of (a.goSourceDirs || [])) srcCopies.push(`COPY ${p}${d}/ ./${d}/`);
+  if (srcCopies.length === 0) srcCopies.push(`COPY ${p}*.go ./`);
+
+  const dockerfile = `
+# ─── Stage 1: Build ───────────────────────────────────────
+FROM ${buildImage} AS build
+WORKDIR /src
+
+${modCopy}
+RUN --mount=type=cache,target=/go/pkg/mod \\
+    go mod download
+
+${srcCopies.join('\n')}
+RUN --mount=type=cache,target=/go/pkg/mod \\
+    --mount=type=cache,target=/root/.cache/go-build \\
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/${bin} ${target}
+
+# ─── Stage 2: Runtime ─────────────────────────────────────
+FROM ${runtimeImage}
+WORKDIR /app
+
+RUN apk add --no-cache ca-certificates && \\
+    addgroup -S appgroup && adduser -S appuser -G appgroup
+
+COPY --from=build /out/${bin} /usr/local/bin/${bin}
+
+USER appuser
+EXPOSE ${a.port}
+ENTRYPOINT ["/usr/local/bin/${bin}"]`.trim();
+
+  const improvements = [
+    `Go binary built static (CGO disabled) and shipped on ${runtimeImage} — tiny, no toolchain in the final image.`,
+    `Build target is \`${target}\` and the binary is \`${bin}\` (from the module path). Verify these match your main package.`,
+    `EXPOSE ${a.port} is a default — set the real port (or pass a hint) if your service listens elsewhere.`,
+    'No HEALTHCHECK is emitted (Go apps have no standard health route) — add one pointing at your readiness endpoint.',
+  ];
+  return { dockerfile, dockerignore: goDockerignore(), improvements };
+}
+
+// ── Rust ───────────────────────────────────────────────────────────────────────
+// Build the release binary on the toolchain image, ship it on debian-slim
+// (Rust links glibc by default, so a glibc runtime is the safe choice).
+
+function generateRustRoot(a, dir = '.') {
+  const buildImage = BASE_IMAGES[STACKS.RUST].build(a.version);
+  const runtimeImage = BASE_IMAGES[STACKS.RUST].runtime();
+  const p = dir === '.' ? '' : `${dir}/`;
+  const bin = a.binaryName || 'app';
+  const lockedFlag = a.hasLock ? ' --locked' : '';
+
+  const manifestCopy = a.hasLock
+    ? `COPY ${p}Cargo.toml ${p}Cargo.lock ./`
+    : `COPY ${p}Cargo.toml ./`;
+  const buildRsCopy = a.hasBuildRs ? `COPY ${p}build.rs ./\n` : '';
+
+  const dockerfile = `
+# ─── Stage 1: Build ───────────────────────────────────────
+FROM ${buildImage} AS build
+WORKDIR /app
+
+${manifestCopy}
+${buildRsCopy}COPY ${p}src/ src/
+RUN --mount=type=cache,target=/usr/local/cargo/registry \\
+    --mount=type=cache,target=/app/target \\
+    cargo build --release${lockedFlag} --bin ${bin} && \\
+    cp target/release/${bin} /out-${bin}
+
+# ─── Stage 2: Runtime ─────────────────────────────────────
+FROM ${runtimeImage}
+WORKDIR /app
+
+RUN apt-get update && \\
+    apt-get install --no-install-recommends -y ca-certificates && \\
+    rm -rf /var/lib/apt/lists/* && \\
+    groupadd --system appgroup && \\
+    useradd --system --gid appgroup --home-dir /app appuser
+
+COPY --from=build /out-${bin} /usr/local/bin/${bin}
+
+USER appuser
+EXPOSE ${a.port}
+ENTRYPOINT ["/usr/local/bin/${bin}"]`.trim();
+
+  const improvements = [
+    `Rust release binary \`${bin}\` built with cargo${a.hasLock ? ' --locked' : ''} and shipped on ${runtimeImage}.`,
+    `EXPOSE ${a.port} is a default — set the real port (or pass a hint) if your service listens elsewhere.`,
+    'If you build a fully static binary (musl target), you can swap the runtime to a smaller base like distroless or scratch.',
+    'No HEALTHCHECK is emitted — add one pointing at your readiness endpoint.',
+  ];
+  return { dockerfile, dockerignore: rustDockerignore(), improvements };
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function installLine(packageManager, prodOnly) {
@@ -1409,6 +1596,30 @@ obj
 **/*.suo
 .vs
 TestResults
+Dockerfile
+.dockerignore`.trim();
+}
+
+function goDockerignore() {
+  return `.git
+.gitignore
+.env
+.env.*
+*.md
+bin
+dist
+vendor
+Dockerfile
+.dockerignore`.trim();
+}
+
+function rustDockerignore() {
+  return `.git
+.gitignore
+.env
+.env.*
+*.md
+target
 Dockerfile
 .dockerignore`.trim();
 }

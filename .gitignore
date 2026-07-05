@@ -21,3 +21,6 @@ npm-debug.log*
 .DS_Store
 .idea/
 .vscode/
+
+# local working notes — not part of the published repo
+handover.md

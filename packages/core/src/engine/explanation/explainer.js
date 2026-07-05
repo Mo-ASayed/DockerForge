@@ -8,6 +8,8 @@ function buildExplanation(analysis, result, securityNotes) {
     [STACKS.NODE]: 'Node.js',
     [STACKS.PYTHON]: 'Python',
     [STACKS.DOTNET]: '.NET',
+    [STACKS.GO]: 'Go',
+    [STACKS.RUST]: 'Rust',
   };
 
   const lines = [];
@@ -49,6 +51,20 @@ function buildExplanation(analysis, result, securityNotes) {
       `**Base images:** SDK image (\`mcr.microsoft.com/dotnet/sdk:${analysis.version}\`) used to build, then the much smaller ASP.NET runtime image (\`mcr.microsoft.com/dotnet/aspnet:${analysis.version}\`) for production. SDK is ~750MB, runtime is ~220MB.`
     );
     lines.push(`**Multi-stage build:** Always used for .NET. The SDK is never shipped to production.`);
+  }
+
+  if (analysis.stack === STACKS.GO) {
+    lines.push(
+      `**Base images:** build on \`golang:${analysis.version}-alpine\`, ship the compiled binary on \`alpine\`. CGO is disabled so the binary is static — the final image carries no Go toolchain.`
+    );
+    lines.push(`**Build strategy:** Multi-stage. Only the built binary reaches the runtime image.`);
+  }
+
+  if (analysis.stack === STACKS.RUST) {
+    lines.push(
+      `**Base images:** build on \`rust:${analysis.version}-slim-bookworm\`, ship the release binary on \`debian:bookworm-slim\` (Rust links glibc by default).`
+    );
+    lines.push(`**Build strategy:** Multi-stage. Only the release binary reaches the runtime image.`);
   }
 
   // Port

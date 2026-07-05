@@ -5,12 +5,16 @@ const STACKS = {
   NODE: 'node',
   PYTHON: 'python',
   DOTNET: 'dotnet',
+  GO: 'go',
+  RUST: 'rust',
 };
 
 const DETECTION_FILES = {
   [STACKS.NODE]: ['package.json'],
   [STACKS.PYTHON]: ['requirements.txt', 'pyproject.toml', 'setup.py', 'Pipfile'],
   [STACKS.DOTNET]: ['.csproj'], // matched by extension
+  [STACKS.GO]: ['go.mod'],
+  [STACKS.RUST]: ['Cargo.toml'],
 };
 
 const BASE_IMAGES = {
@@ -20,18 +24,32 @@ const BASE_IMAGES = {
     runtime: (version) => `mcr.microsoft.com/dotnet/aspnet:${version}`,
     sdk: (version) => `mcr.microsoft.com/dotnet/sdk:${version}`,
   },
+  // Go and Rust compile to a static-ish binary; build on the toolchain image,
+  // ship on a tiny runtime. Go uses alpine; Rust links against glibc so uses debian-slim.
+  [STACKS.GO]: {
+    build: (version) => `golang:${version}-alpine3.21`,
+    runtime: () => `alpine:3.21`,
+  },
+  [STACKS.RUST]: {
+    build: (version) => `rust:${version}-slim-bookworm`,
+    runtime: () => `debian:bookworm-slim`,
+  },
 };
 
 const DEFAULT_VERSIONS = {
   [STACKS.NODE]: '20',
   [STACKS.PYTHON]: '3.12',
   [STACKS.DOTNET]: '8.0',
+  [STACKS.GO]: '1.23',
+  [STACKS.RUST]: '1.83',
 };
 
 const DEFAULT_PORTS = {
   [STACKS.NODE]: 3000,
   [STACKS.PYTHON]: 8000,
   [STACKS.DOTNET]: 8080,
+  [STACKS.GO]: 8080,
+  [STACKS.RUST]: 8080,
 };
 
 const IGNORED_DIRS = [

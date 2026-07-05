@@ -1,7 +1,6 @@
 {
   "name": "dockerforge",
-  "version": "0.1.1",
-  "private": true,
+  "version": "0.2.0",
   "description": "DockerForge open-source core and CLI: generate and lint production-grade Dockerfiles.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/Mo-ASayed/DockerForge",
@@ -9,10 +8,46 @@
     "type": "git",
     "url": "git+https://github.com/Mo-ASayed/DockerForge.git"
   },
+  "bugs": {
+    "url": "https://github.com/Mo-ASayed/DockerForge/issues"
+  },
   "workspaces": [
     "packages/*"
   ],
+  "bin": {
+    "dockerforge": "bin/dockerforge.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "docker",
+    "dockerfile",
+    "container",
+    "containers",
+    "containerize",
+    "cli",
+    "generator",
+    "lint",
+    "sarif"
+  ],
   "scripts": {
-    "test": "node --test packages/core/test/*.test.js packages/cli/test/*.test.js"
+    "test": "node --test packages/core/test/*.test.js packages/cli/test/*.test.js",
+    "audit": "npm audit --audit-level=moderate",
+    "pack:dry-run": "node scripts/verify-release.js --dry-run-only",
+    "smoke:pack": "node scripts/verify-release.js --skip-tests --skip-audit --skip-dry-run",
+    "verify": "node scripts/verify-release.js"
+  },
+  "dependencies": {
+    "@dockerforge/cli": "0.2.0"
   }
 }

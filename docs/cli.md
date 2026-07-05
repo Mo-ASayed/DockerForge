@@ -2,6 +2,19 @@
 
 The `dockerforge` command has two subcommands: `generate` and `lint`. Both run offline.
 
+Run it directly with npm:
+
+```bash
+npx @dockerforge/cli generate ./my-app
+```
+
+Or install the canonical CLI package globally:
+
+```bash
+npm install -g @dockerforge/cli
+dockerforge generate ./my-app
+```
+
 ```text
 dockerforge <command> [path] [options]
 

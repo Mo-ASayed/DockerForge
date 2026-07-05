@@ -15,9 +15,33 @@ const { promisify } = require('node:util');
 const run = promisify(execFile);
 
 const CLI = path.join(__dirname, '..', 'src', 'index.js');
+const ROOT_PACKAGE = path.join(__dirname, '..', '..', '..', 'package.json');
+const CLI_PACKAGE = path.join(__dirname, '..', '..', 'cli', 'package.json');
+const CORE_PACKAGE = path.join(__dirname, '..', '..', 'core', 'package.json');
 const FIXTURE = path.join(
   __dirname, '..', '..', '..', 'fixtures', 'node-npm'
 );
+
+test('root dockerforge package is a publishable npx alias for the CLI', async () => {
+  const rootPkg = JSON.parse(await fs.readFile(ROOT_PACKAGE, 'utf8'));
+
+  assert.equal(rootPkg.name, 'dockerforge');
+  assert.notEqual(rootPkg.private, true, 'root package must be publishable for npx dockerforge');
+  assert.equal(rootPkg.bin?.dockerforge, 'bin/dockerforge.js');
+  assert.equal(rootPkg.dependencies?.['@dockerforge/cli'], rootPkg.version);
+});
+
+test('@dockerforge/cli depends on the matching core package version', async () => {
+  const cliPkg = JSON.parse(await fs.readFile(CLI_PACKAGE, 'utf8'));
+  const corePkg = JSON.parse(await fs.readFile(CORE_PACKAGE, 'utf8'));
+
+  assert.equal(cliPkg.version, corePkg.version);
+  assert.equal(
+    cliPkg.dependencies?.['@dockerforge/core'],
+    corePkg.version,
+    'CLI must not publish against a stale core range'
+  );
+});
 
 test('generate --json emits a Dockerfile and confidence', async () => {
   const { stdout } = await run('node', [CLI, 'generate', FIXTURE, '--json'], { env: { ...process.env, NO_COLOR: '1' } });

@@ -10,6 +10,8 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs/promises');
+const os = require('node:os');
 const path = require('node:path');
 
 const core = require('../src/index.js');
@@ -42,4 +44,49 @@ test('Next.js source copy uses the real src/ layout, not a guessed app/pages/com
   assert.ok(df.includes('COPY src/ ./src/'), 'should copy the real src/ directory');
   assert.ok(!df.includes('COPY pages/ ./pages/'), 'should not blindly copy a non-existent pages/');
   assert.ok(df.includes('next.config.ts'), 'should copy the detected next.config.ts');
+});
+
+test('Next.js with output: "standalone" emits the self-contained standalone bundle', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dockerforge-next-standalone-'));
+  try {
+    await fs.writeFile(path.join(dir, 'yarn.lock'), '# yarn lockfile v1\n');
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({
+      name: 'standalone-next', private: true,
+      scripts: { build: 'next build', start: 'next start' },
+      dependencies: { next: '15.0.0', react: '^19.0.0', 'react-dom': '^19.0.0' },
+    }, null, 2));
+    await fs.writeFile(path.join(dir, 'next.config.ts'), "export default { output: 'standalone' };\n");
+    await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'src', 'index.tsx'), 'export default function P(){return null;}\n');
+
+    const projectPath = await core.ingestLocal(dir);
+    const result = await core.runDockerfileEngine({ projectPath });
+    const df = result.dockerfile;
+
+    assert.ok(df.includes('/.next/standalone ./'), 'should copy the standalone server bundle to /app');
+    assert.ok(df.includes('/.next/static ./.next/static'), 'should copy .next/static');
+    assert.ok(df.includes('CMD ["node", "server.js"]'), 'standalone runs node server.js');
+    assert.ok(df.includes('USER node'), 'standalone runtime runs as the non-root node user');
+    assert.ok(df.includes('ENV HOSTNAME=0.0.0.0'), 'standalone server must bind 0.0.0.0 to be reachable');
+    // Standalone bundles its own node_modules — the runtime must NOT copy or install them.
+    const runtime = df.slice(df.lastIndexOf('\nFROM '));
+    const runtimeInstructions = runtime
+      .split('\n')
+      .filter(l => /^\s*(COPY|RUN)\s/.test(l))
+      .join('\n');
+    assert.ok(!/node_modules/.test(runtimeInstructions), 'standalone runtime must not copy node_modules');
+    assert.ok(!/install/.test(runtimeInstructions), 'standalone runtime must not install');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('Next.js without standalone falls back to copying production node_modules', async () => {
+  // The committed fixture (node-nextjs) has a plain next.config.ts with no standalone flag.
+  const projectPath = await core.ingestLocal(FIXTURE);
+  const result = await core.runDockerfileEngine({ projectPath });
+  const df = result.dockerfile;
+
+  assert.ok(!df.includes('/.next/standalone'), 'non-standalone app should not use the standalone bundle');
+  assert.ok(df.includes('COPY --from=builder /app/node_modules ./node_modules'), 'non-standalone runtime copies production node_modules');
 });

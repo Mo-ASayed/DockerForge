@@ -1,0 +1,9 @@
+{
+  "name": "typescript-api",
+  "version": "1.0.0",
+  "main": "dist/server.js",
+  "scripts": { "build": "tsc", "start": "node dist/server.js" },
+  "engines": { "node": "22" },
+  "dependencies": { "express": "^4.19.2" },
+  "devDependencies": { "typescript": "^5.5.0" }
+}

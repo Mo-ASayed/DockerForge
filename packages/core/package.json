@@ -1,6 +1,6 @@
 {
   "name": "@dockerforge/core",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "DockerForge engine: analyse a local project and generate production-grade Dockerfiles, .dockerignore, and Compose, and lint Dockerfiles. Offline, no network.",
   "license": "Apache-2.0",
   "author": "Docker Forge",
@@ -14,6 +14,9 @@
     "url": "https://github.com/Mo-ASayed/DockerForge/issues"
   },
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
   "files": [
     "src",
     "LICENSE",
@@ -37,8 +40,8 @@
     "sarif"
   ],
   "dependencies": {
-    "adm-zip": "^0.5.10",
-    "fs-extra": "^11.2.0",
-    "glob": "^10.3.10"
+    "adm-zip": "^0.5.18",
+    "fs-extra": "^11.3.6",
+    "glob": "^13.0.6"
   }
 }

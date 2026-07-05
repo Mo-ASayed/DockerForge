@@ -91,7 +91,7 @@ any SARIF viewer. Full detail for each rule is in the [rules reference](https://
 | Code | Meaning |
 | --- | --- |
 | `0` | Success. |
-| `1` | An error. The JSON error carries a typed `code`, for example `PATH_NOT_FOUND`. |
+| `1` | An error. The human error line includes a typed code when one is available, for example `PATH_NOT_FOUND`. |
 
 ## Use in CI
 

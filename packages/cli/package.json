@@ -1,6 +1,6 @@
 {
   "name": "@dockerforge/cli",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "DockerForge CLI: generate production-grade Dockerfiles, .dockerignore, and Compose from a local project, and lint Dockerfiles (human/JSON/SARIF). Offline.",
   "license": "Apache-2.0",
   "author": "Docker Forge",
@@ -17,6 +17,9 @@
     "dockerforge": "src/index.js"
   },
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
   "files": [
     "src",
     "LICENSE",
@@ -41,7 +44,7 @@
     "sarif"
   ],
   "dependencies": {
-    "@dockerforge/core": "^0.1.2",
-    "commander": "^12.1.0"
+    "@dockerforge/core": "0.2.0",
+    "commander": "^13.1.0"
   }
 }

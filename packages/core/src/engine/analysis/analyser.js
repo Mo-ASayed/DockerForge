@@ -4,12 +4,47 @@
 const path = require('path');
 const fs = require('fs-extra');
 const { STACKS, DEFAULT_VERSIONS, DEFAULT_PORTS, ROOT_CONFIG_FILES } = require('../constants');
+const { UnsupportedStackError } = require('../../errors');
+
+// Marker files for popular languages DockerForge does NOT generate for yet. Used only when no
+// supported stack was found, so we can name the language in the error instead of a generic
+// "nothing found". Keep this list ordered most-specific first.
+const UNSUPPORTED_LANGUAGE_MARKERS = [
+  { name: 'Ruby',            files: ['Gemfile', 'Gemfile.lock', 'config.ru', '.ruby-version'] },
+  { name: 'Java',            files: ['pom.xml', 'build.gradle', 'build.gradle.kts', 'settings.gradle', 'gradlew'] },
+  { name: 'PHP',             files: ['composer.json', 'composer.lock', 'artisan'] },
+  { name: 'Elixir',          files: ['mix.exs'] },
+  { name: 'Scala',           files: ['build.sbt'] },
+  { name: 'Swift',           files: ['Package.swift'] },
+  { name: 'Dart or Flutter', files: ['pubspec.yaml'] },
+  { name: 'Deno',            files: ['deno.json', 'deno.jsonc'] },
+];
+
+const SUPPORTED_STACKS_TEXT = 'Node.js, Python, .NET, Go, and Rust';
+
+// Project-controlled names (a Cargo crate name, a Go module path, a cmd/ dir) are interpolated
+// into shell-form RUN instructions in the generated Dockerfile. A crafted manifest could smuggle
+// shell metacharacters there and run arbitrary commands at `docker build` time. Restrict such
+// tokens to a safe charset; anything outside it falls back to a default so the output is always
+// a literal, single token. Valid Cargo/Go names already satisfy this, so real projects are
+// unaffected.
+const SAFE_NAME_RE = /^[A-Za-z0-9._-]+$/;
+function safeToken(value, fallback) {
+  return typeof value === 'string' && SAFE_NAME_RE.test(value) ? value : fallback;
+}
+// A Go build target is either "." or "./seg/seg" with safe segments only.
+function safeGoBuildTarget(target) {
+  if (target === '.') return true;
+  if (!target.startsWith('./')) return false;
+  return target.slice(2).split('/').every(seg => SAFE_NAME_RE.test(seg));
+}
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 // Dirs that are never service roots
 const SKIP_DIRS = new Set([
   'node_modules', '.git', '.next', '.nuxt', 'dist', 'build',
+  'target', 'vendor', // rust build output / go vendored deps
   '__pycache__', '.pytest_cache', 'bin', 'obj', 'coverage',
   '.venv', 'venv', 'env', '.env', '.idea', '.vscode',
   'public', 'static', 'assets', 'media', '.cache', 'out', '.output',
@@ -126,11 +161,73 @@ const LOCKFILE_MAP = {
   [STACKS.NODE]:   ['yarn.lock', 'package-lock.json', 'pnpm-lock.yaml'],
   [STACKS.PYTHON]: [],   // pip projects have no lockfile; poetry/pipenv detected via their own manifests
   [STACKS.DOTNET]: [],
+  [STACKS.GO]:     [],   // go.mod is the manifest; go.sum is optional for detection
+  [STACKS.RUST]:  [],    // Cargo.toml is the manifest; Cargo.lock optional for detection
 };
 
 function hasLockfile(fileNames, stack) {
   const required = LOCKFILE_MAP[stack] || [];
   return required.length === 0 || required.some(lf => fileNames.includes(lf));
+}
+
+async function fileContainsGoMain(filePath) {
+  try {
+    const content = await fs.readFile(filePath, 'utf-8');
+    return /^\s*package\s+main\b/m.test(content);
+  } catch {
+    return false;
+  }
+}
+
+async function hasRunnableGoEntrypoint(dir, fileNames) {
+  for (const fileName of fileNames) {
+    if (fileName.endsWith('.go') && await fileContainsGoMain(path.join(dir, fileName))) {
+      return true;
+    }
+  }
+
+  try {
+    const cmdDir = path.join(dir, 'cmd');
+    const cmdEntries = await fs.readdir(cmdDir, { withFileTypes: true });
+    for (const entry of cmdEntries) {
+      if (!entry.isDirectory()) continue;
+      const entryDir = path.join(cmdDir, entry.name);
+      const entryFiles = await fs.readdir(entryDir, { withFileTypes: true });
+      for (const file of entryFiles) {
+        if (file.isFile() && file.name.endsWith('.go') && await fileContainsGoMain(path.join(entryDir, file.name))) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    // No cmd/ tree, or unreadable; root-level package main check above is enough.
+  }
+
+  return false;
+}
+
+async function hasRunnableRustEntrypoint(dir, cargoText) {
+  if (await fs.pathExists(path.join(dir, 'src', 'main.rs'))) return true;
+
+  try {
+    const binDir = path.join(dir, 'src', 'bin');
+    const entries = await fs.readdir(binDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith('.rs')) return true;
+      if (entry.isDirectory() && await fs.pathExists(path.join(binDir, entry.name, 'main.rs'))) return true;
+    }
+  } catch {
+    // src/bin is optional.
+  }
+
+  const binSections = [...cargoText.matchAll(/\[\[bin\]\]([\s\S]*?)(?=\n\s*\[|$)/g)];
+  for (const section of binSections) {
+    const pathMatch = section[1].match(/^\s*path\s*=\s*"([^"]+)"/m);
+    if (!pathMatch) return true;
+    if (await fs.pathExists(path.join(dir, pathMatch[1]))) return true;
+  }
+
+  return false;
 }
 
 // Returns all service root dirs found in the tree, with their detected stack.
@@ -199,6 +296,19 @@ async function findServiceRoots(projectPath) {
       roots.set(dir, STACKS.DOTNET);
     }
 
+    if (!roots.has(dir) && fileNames.includes('go.mod') && await hasRunnableGoEntrypoint(dir, fileNames)) {
+      roots.set(dir, STACKS.GO);
+    }
+
+    if (!roots.has(dir) && fileNames.includes('Cargo.toml')) {
+      let cargoText = '';
+      try { cargoText = await fs.readFile(path.join(dir, 'Cargo.toml'), 'utf-8'); }
+      catch { /* unreadable manifests are handled later by the analyser */ }
+      if (await hasRunnableRustEntrypoint(dir, cargoText)) {
+        roots.set(dir, STACKS.RUST);
+      }
+    }
+
     // Recurse
     for (const entry of entries) {
       if (entry.isDirectory() && !SKIP_DIRS.has(entry.name)) {
@@ -209,9 +319,10 @@ async function findServiceRoots(projectPath) {
 
   await walk(projectPath, 0);
 
-  // If subdirectory services were found, drop any root-level service.
+  // If subdirectory services were found, drop any root-level non-compiled service.
   // A package.json at project root is usually a Vercel/workspace config, not a runnable service.
-  if (roots.size > 1 && roots.has(projectPath)) {
+  // Go/Rust roots are only registered after proving they have an entrypoint, so keep them.
+  if (roots.size > 1 && roots.has(projectPath) && ![STACKS.GO, STACKS.RUST].includes(roots.get(projectPath))) {
     roots.delete(projectPath);
   }
 
@@ -333,6 +444,30 @@ async function findWorkspaceSharedConfigs(projectPath, workspacePackageDirs) {
   return result;
 }
 
+// Scans the project root and its immediate subdirectories for marker files of a known-but-
+// unsupported language. Returns the language name (e.g. "Ruby") or null. Shallow on purpose:
+// it only runs when no supported stack was found, just to make the error message specific.
+async function detectUnsupportedLanguage(projectPath) {
+  const seen = new Set();
+  const collect = async (dir) => {
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
+      for (const e of entries) if (e.isFile()) seen.add(e.name);
+      return entries;
+    } catch { return []; }
+  };
+  const rootEntries = await collect(projectPath);
+  for (const e of rootEntries) {
+    if (e.isDirectory() && !SKIP_DIRS.has(e.name)) {
+      await collect(path.join(projectPath, e.name));
+    }
+  }
+  for (const { name, files } of UNSUPPORTED_LANGUAGE_MARKERS) {
+    if (files.some(f => seen.has(f))) return name;
+  }
+  return null;
+}
+
 // ── Main Entry ───────────────────────────────────────────────────────────────
 
 async function analyseProject(projectPath, hints = {}) {
@@ -346,9 +481,18 @@ async function analyseProject(projectPath, hints = {}) {
   });
 
   if (roots.length === 0) {
-    throw new Error(
-      'No supported stack found (Node.js, Python, .NET). ' +
-      'Check the URL points at a folder containing source code.'
+    const lang = await detectUnsupportedLanguage(projectPath);
+    if (lang) {
+      throw new UnsupportedStackError(
+        `Detected a ${lang} project, which DockerForge does not generate Dockerfiles for yet. ` +
+        `Supported stacks: ${SUPPORTED_STACKS_TEXT}. ` +
+        `Follow the project for new language support, or hand-write a Dockerfile for now.`
+      );
+    }
+    throw new UnsupportedStackError(
+      `No supported stack found. DockerForge supports ${SUPPORTED_STACKS_TEXT}. ` +
+      `Point it at a folder containing one of: package.json, requirements.txt / pyproject.toml / setup.py / Pipfile, ` +
+      `a .csproj file, go.mod, or Cargo.toml.`
     );
   }
 
@@ -382,6 +526,8 @@ async function analyseProject(projectPath, hints = {}) {
     if (resolvedStack === STACKS.NODE)   analysis = await analyseNode(dir, files, hints, projectPath, isWorkspace);
     else if (resolvedStack === STACKS.PYTHON) analysis = await analysePython(dir, files, hints);
     else if (resolvedStack === STACKS.DOTNET) analysis = await analyseDotnet(dir, files, hints);
+    else if (resolvedStack === STACKS.GO)     analysis = await analyseGo(dir, files, hints);
+    else if (resolvedStack === STACKS.RUST)   analysis = await analyseRust(dir, files, hints);
     else continue;
 
     // Attach location info relative to project root
@@ -526,6 +672,7 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
   // Build output directory — detect framework-specific output paths
   let buildOutputDir = 'dist';
   let framework = null;
+  let nextStandalone = false; // true when Next.js is configured with output: 'standalone'
   // Root-level dirs referenced by vite config via '../dirname' imports.
   // Must be copied into build context before `vite build` runs.
   const rootBuildDeps = [];
@@ -620,14 +767,20 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
       }
     }
   } else if (framework === 'nextjs') {
-    try {
-      const configPath = path.join(serviceDir, 'next.config.js');
-      if (await fs.pathExists(configPath)) {
+    // Read whichever next.config.* exists (js/mjs/cjs/ts) for distDir and the standalone flag.
+    for (const configFile of ['next.config.js', 'next.config.mjs', 'next.config.cjs', 'next.config.ts']) {
+      try {
+        const configPath = path.join(serviceDir, configFile);
+        if (!(await fs.pathExists(configPath))) continue;
         const content = await fs.readFile(configPath, 'utf-8');
         const match = content.match(/distDir\s*:\s*['"]([^'"]+)['"]/);
         if (match && match[1]) buildOutputDir = match[1];
-      }
-    } catch { /* skip on error */ }
+        // `output: 'standalone'` makes `next build` emit a self-contained server bundle
+        // (.next/standalone with its own minimal node_modules + server.js).
+        if (/output\s*:\s*['"]standalone['"]/.test(content)) nextStandalone = true;
+        break;
+      } catch { /* skip on error */ }
+    }
   } else if (framework === 'astro') {
     const astroConfigNames = ['astro.config.mjs', 'astro.config.js', 'astro.config.ts'];
     for (const configFile of astroConfigNames) {
@@ -719,10 +872,26 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
     catch { /* absent */ }
   }
 
+  const SOURCE_FILE_CANDIDATES = [
+    entryPoint,
+    'index.html',
+    'server.js', 'server.mjs', 'server.cjs', 'server.ts',
+    'index.js', 'index.mjs', 'index.cjs', 'index.ts',
+    'main.js', 'main.mjs', 'main.cjs', 'main.ts',
+    'app.js', 'app.mjs', 'app.cjs', 'app.ts',
+  ].filter(Boolean);
+  const sourceFiles = [];
+  for (const f of [...new Set(SOURCE_FILE_CANDIDATES)]) {
+    try { if ((await fs.stat(path.join(projectPath, f))).isFile()) sourceFiles.push(f); }
+    catch { /* absent */ }
+  }
+
   // Detect framework build/runtime config files that exist, so we copy real filenames
   // instead of guessing a single hard-coded one. Next.js also reads its config at runtime.
   const FRAMEWORK_CONFIG_CANDIDATES = [
     'next.config.js', 'next.config.mjs', 'next.config.cjs', 'next.config.ts',
+    'vite.config.js', 'vite.config.mjs', 'vite.config.cjs', 'vite.config.ts', 'vite.config.mts',
+    'astro.config.js', 'astro.config.mjs', 'astro.config.cjs', 'astro.config.ts',
     'tailwind.config.js', 'tailwind.config.ts', 'tailwind.config.cjs', 'tailwind.config.mjs',
     'components.json', 'jsconfig.json',
     'remix.config.js', 'svelte.config.js', 'nuxt.config.ts', 'nuxt.config.js',
@@ -762,8 +931,10 @@ async function analyseNode(projectPath, files, hints, projectRootPath = null, is
     hasScopedPackages,
     siblingDeps,     // root-level dirs referenced via require('../xxx') — must be COPYed into runtime image
     sourceDirs,           // conventional source dirs that actually exist on disk (real, not guessed)
+    sourceFiles,          // top-level source/entry files that actually exist on disk
     frameworkConfigFiles, // framework build/runtime config files present (next.config, tailwind.config, ...)
     nextRuntimeConfig,    // the next.config.* file Next.js reads at runtime, or null
+    nextStandalone,       // true when next.config sets output: 'standalone' (self-contained server bundle)
     assumptions,
   };
 }
@@ -829,6 +1000,29 @@ async function findDjangoDirs(projectPath, files) {
     if (topDir && !topDir.startsWith('.') && !SKIP_DIRS.has(topDir)) dirs.add(topDir);
   }
   return [...dirs].sort();
+}
+
+// Top-level Python packages/modules to COPY for non-Django apps (FastAPI/Flask/plain).
+// Returns { dirs, rootModules }: directories at the project root that contain .py files,
+// and standalone .py files that live at the project root. This lets the generator copy the
+// real source tree (e.g. `app/`) instead of guessing a single root entry file — which breaks
+// the very common package layout (app/main.py with `uvicorn app.main:app`).
+function findPythonSourceDirs(projectPath, files) {
+  const dirs = new Set();
+  const rootModules = new Set();
+  for (const filePath of files) {
+    if (!filePath.endsWith('.py')) continue;
+    const rel = path.relative(projectPath, filePath).replace(/\\/g, '/');
+    const parts = rel.split('/');
+    if (parts.length === 1) {
+      // Root-level module. manage.py is handled by the Django path, never as a generic module.
+      if (parts[0] !== 'manage.py') rootModules.add(parts[0]);
+    } else {
+      const topDir = parts[0];
+      if (topDir && !topDir.startsWith('.') && !SKIP_DIRS.has(topDir)) dirs.add(topDir);
+    }
+  }
+  return { dirs: [...dirs].sort(), rootModules: [...rootModules].sort() };
 }
 
 async function findDotnetSourceDirs(projectPath) {
@@ -981,6 +1175,7 @@ async function analysePython(projectPath, files, hints) {
   const requirementsHasHashes = detectRequirementsHashes(dependencyText);
   let framework = await detectPythonFramework(projectPath, files, dependencyText);
   const djangoAppDirs = framework === 'django' ? await findDjangoDirs(projectPath, files) : [];
+  const pythonSource = findPythonSourceDirs(projectPath, files);
   let entryPoint = hints.entryPoint;
 
   if (!entryPoint) {
@@ -1043,6 +1238,8 @@ async function analysePython(projectPath, files, hints) {
     nativeDeps,
     requirementsHasHashes,
     djangoAppDirs,
+    pythonSourceDirs: pythonSource.dirs,
+    pythonRootModules: pythonSource.rootModules,
     port,
     hasBuild: hasNativeDeps,
     assumptions,
@@ -1084,6 +1281,143 @@ async function analyseDotnet(projectPath, files, hints) {
     csprojPath: path.relative(projectPath, csprojPath),
     isWebApp,
     dotnetSourceDirs,
+    port,
+    hasBuild: true,
+    assumptions,
+  };
+}
+
+// ── Go Analysis ──────────────────────────────────────────────────────────────
+
+async function analyseGo(projectPath, files, hints) {
+  const assumptions = [];
+  let goMod = '';
+  try { goMod = await fs.readFile(path.join(projectPath, 'go.mod'), 'utf-8'); }
+  catch { assumptions.push('Could not read go.mod, using defaults'); }
+
+  // Go toolchain version from the `go 1.xx` directive.
+  let version = hints.runtimeVersion;
+  if (!version) {
+    const m = goMod.match(/^\s*go\s+(\d+\.\d+)/m);
+    version = m ? m[1] : DEFAULT_VERSIONS[STACKS.GO];
+    if (!m) assumptions.push(`Go version not found in go.mod, defaulted to ${version}`);
+  }
+
+  // Module path → default binary name from its last path segment.
+  const moduleMatch = goMod.match(/^\s*module\s+(\S+)/m);
+  const modulePath = moduleMatch ? moduleMatch[1] : null;
+  const rawBinaryName = (modulePath ? modulePath.split('/').pop() : null) || 'app';
+  const binaryName = safeToken(rawBinaryName, 'app');
+  if (binaryName !== rawBinaryName) {
+    assumptions.push(`Module name "${rawBinaryName}" contains unsafe characters; using binary name "app" — set it explicitly.`);
+  }
+
+  // Locate the main package to build. Conventions: ./main.go at root, or ./cmd/<name>/.
+  const topLevel = files.filter(f => path.dirname(f) === projectPath).map(f => path.basename(f));
+  let buildTarget = '.';
+  if (!topLevel.includes('main.go')) {
+    const cmdDirs = new Set();
+    for (const f of files) {
+      const rel = path.relative(projectPath, f).replace(/\\/g, '/');
+      const parts = rel.split('/');
+      if (parts[0] === 'cmd' && parts.length >= 3 && parts[parts.length - 1].endsWith('.go')) {
+        cmdDirs.add(`./cmd/${parts[1]}`);
+      }
+    }
+    const cmds = [...cmdDirs];
+    if (cmds.length === 1) {
+      buildTarget = cmds[0];
+    } else if (cmds.length > 1) {
+      buildTarget = cmds[0];
+      assumptions.push(`Multiple cmd/ entrypoints found (${cmds.join(', ')}); building ${cmds[0]} — pass a hint to choose another`);
+    } else {
+      assumptions.push('No main.go at root or under cmd/ — defaulted build target to "." ; update it if your main package is elsewhere');
+    }
+  }
+
+  // Explicit source copies (we never emit `COPY . .`): top-level dirs that contain .go files,
+  // plus whether there are .go files at the repo root.
+  const goSourceDirs = new Set();
+  let hasRootGoFiles = false;
+  for (const f of files) {
+    if (!f.endsWith('.go')) continue;
+    const rel = path.relative(projectPath, f).replace(/\\/g, '/');
+    const parts = rel.split('/');
+    if (parts.length === 1) hasRootGoFiles = true;
+    else if (!SKIP_DIRS.has(parts[0])) goSourceDirs.add(parts[0]);
+  }
+
+  // Guard the build target too — it lands in `go build ... <target>`.
+  if (!safeGoBuildTarget(buildTarget)) {
+    assumptions.push(`Build target "${buildTarget}" contains unsafe characters; defaulted to "." — set it explicitly.`);
+    buildTarget = '.';
+  }
+
+  const port = hints.port || DEFAULT_PORTS[STACKS.GO];
+  if (!hints.port) assumptions.push(`Port not detected, defaulted to ${port}`);
+
+  return {
+    stack: STACKS.GO,
+    role: 'backend',
+    version,
+    modulePath,
+    binaryName,
+    buildTarget,
+    hasGoSum: files.some(f => path.basename(f) === 'go.sum'),
+    goSourceDirs: [...goSourceDirs].sort(),
+    hasRootGoFiles,
+    cgo: false,
+    port,
+    hasBuild: true,
+    assumptions,
+  };
+}
+
+// ── Rust Analysis ────────────────────────────────────────────────────────────
+
+async function analyseRust(projectPath, files, hints) {
+  const assumptions = [];
+  let cargo = '';
+  try { cargo = await fs.readFile(path.join(projectPath, 'Cargo.toml'), 'utf-8'); }
+  catch { assumptions.push('Could not read Cargo.toml, using defaults'); }
+
+  // Binary name: an explicit [[bin]] name wins, else the [package] name.
+  let binaryName = null;
+  const binMatch = cargo.match(/\[\[bin\]\][\s\S]*?name\s*=\s*"([^"]+)"/);
+  if (binMatch) binaryName = binMatch[1];
+  if (!binaryName) {
+    const pkgMatch = cargo.match(/\[package\][\s\S]*?name\s*=\s*"([^"]+)"/);
+    binaryName = pkgMatch ? pkgMatch[1] : null;
+  }
+  if (!binaryName) { binaryName = 'app'; assumptions.push('Crate name not found in Cargo.toml, defaulted binary to "app"'); }
+  const rawBinaryName = binaryName;
+  binaryName = safeToken(binaryName, 'app');
+  if (binaryName !== rawBinaryName) {
+    assumptions.push(`Crate name "${rawBinaryName}" contains unsafe characters; using binary name "app" — set it explicitly.`);
+  }
+
+  // Rust toolchain: rust-version in Cargo.toml if present, else default.
+  let version = hints.runtimeVersion;
+  if (!version) {
+    const rv = cargo.match(/rust-version\s*=\s*"([0-9.]+)"/);
+    version = rv ? rv[1] : DEFAULT_VERSIONS[STACKS.RUST];
+    if (!rv) assumptions.push(`rust-version not set in Cargo.toml, defaulted toolchain to ${version}`);
+  }
+
+  const hasLock = files.some(f => path.basename(f) === 'Cargo.lock');
+  if (!hasLock) assumptions.push('No Cargo.lock committed — builds are not fully reproducible; run `cargo generate-lockfile` and commit it');
+  const hasBuildRs = files.some(f => path.basename(f) === 'build.rs');
+
+  const port = hints.port || DEFAULT_PORTS[STACKS.RUST];
+  if (!hints.port) assumptions.push(`Port not detected, defaulted to ${port}`);
+
+  return {
+    stack: STACKS.RUST,
+    role: 'backend',
+    version,
+    binaryName,
+    hasLock,
+    hasBuildRs,
     port,
     hasBuild: true,
     assumptions,
@@ -1149,6 +1483,7 @@ function getFileList(projectPath) {
     absolute: true,
     ignore: [
       '**/node_modules/**', '**/.git/**', '**/bin/**', '**/obj/**',
+      '**/target/**', '**/vendor/**',
       '**/__tests__/**', '**/__mocks__/**', '**/test/**', '**/tests/**',
       '**/fixtures/**', '**/spec/**', '**/specs/**',
       '**/examples/**', '**/example/**', '**/samples/**', '**/sample/**',

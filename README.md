@@ -18,6 +18,13 @@ network calls.
 npx @dockerforge/cli generate ./my-app
 ```
 
+For repeated use, install the canonical CLI package globally:
+
+```bash
+npm install -g @dockerforge/cli
+dockerforge generate ./my-app
+```
+
 ```text
 DockerForge
   Services   1 found [.(node)]
@@ -98,10 +105,14 @@ commercial and is not in this repository.
 ```bash
 npm install
 npm test
+npm run verify
 ```
 
 Tests use Node's built-in test runner and run offline against the sample projects in
 [`fixtures/`](fixtures).
+
+`npm run verify` is the release gate: it runs tests, audits dependencies, inspects npm pack output,
+installs packed tarballs into fresh consumer projects, and runs the installed `dockerforge` command.
 
 ## License
 
