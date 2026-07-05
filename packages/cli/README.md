@@ -28,6 +28,15 @@ dockerforge generate ./my-app
 
 ## Generate
 
+Run DockerForge from the root of the app you want to containerize:
+
+```bash
+cd ./my-app
+npx @dockerforge/cli generate .
+```
+
+It writes a `Dockerfile`, `.dockerignore`, and `docker-compose.yml` by default.
+
 ```bash
 dockerforge generate .                 # write files into the current directory
 dockerforge generate ./app -o ./out    # write into a chosen directory
@@ -48,6 +57,19 @@ dockerforge generate . --json          # JSON output for scripts and CI
 The default output is a coloured summary with the detected services, a confidence score, and any
 warnings. `--json` and `--print` produce plain output with no decoration. Colour turns off when
 the output is not a terminal or when `NO_COLOR` is set.
+
+After reviewing the generated files, build and run with Docker:
+
+```bash
+docker build -t my-app .
+docker run --rm -p 3000:3000 my-app
+```
+
+Or use the generated Compose file:
+
+```bash
+docker compose up --build
+```
 
 ## Lint
 

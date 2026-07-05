@@ -37,6 +37,21 @@ Analyse a project directory and produce a Dockerfile, a `.dockerignore`, and a C
 dockerforge generate ./my-app
 ```
 
+Run it from inside a project to write files into that project:
+
+```bash
+cd ./my-app
+dockerforge generate .
+```
+
+The default generated files are:
+
+```text
+Dockerfile
+.dockerignore
+docker-compose.yml
+```
+
 ### Options
 
 | Flag | Default | Effect |
@@ -76,6 +91,9 @@ dockerforge generate . --print | docker build -t my-app -f - .
 ### Examples
 
 ```bash
+# Generate into the app directory
+dockerforge generate ./my-app
+
 # Write into a separate directory
 dockerforge generate ./service --output ./service/docker
 
@@ -84,6 +102,20 @@ dockerforge generate . --stack python --port 8000
 
 # Inspect the result without writing anything
 dockerforge generate . --print
+```
+
+After reviewing the generated files, build and run the image:
+
+```bash
+docker build -t my-app ./my-app
+docker run --rm -p 3000:3000 my-app
+```
+
+Or use the generated Compose file:
+
+```bash
+cd ./my-app
+docker compose up --build
 ```
 
 ## lint

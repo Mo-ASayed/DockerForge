@@ -39,6 +39,49 @@ DockerForge
    - HEALTHCHECK probes /health; add a /health endpoint if your app does not expose one
 ```
 
+## Generate a Dockerfile
+
+Run DockerForge from the root of the app you want to containerize:
+
+```bash
+cd ./my-app
+npx @dockerforge/cli generate .
+```
+
+DockerForge writes:
+
+```text
+Dockerfile
+.dockerignore
+docker-compose.yml
+```
+
+To preview the Dockerfile before writing files:
+
+```bash
+npx @dockerforge/cli generate ./my-app --print
+```
+
+To write the files somewhere else:
+
+```bash
+npx @dockerforge/cli generate ./my-app --output ./docker-output
+```
+
+After reviewing the generated files, build and run the image with Docker:
+
+```bash
+docker build -t my-app ./my-app
+docker run --rm -p 3000:3000 my-app
+```
+
+Or use the generated Compose file:
+
+```bash
+cd ./my-app
+docker compose up --build
+```
+
 The generated Dockerfile is multi-stage, runs as a non-root user, pins the base image, and adds
 a healthcheck:
 
