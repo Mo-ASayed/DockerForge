@@ -9,7 +9,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -29,3 +29,26 @@ jobs:
       - run: npm publish -w @dockerforge/cli --provenance
       - if: ${{ inputs.publish_root_alias }}
         run: npm publish --provenance
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          NOTES="docs/release-notes/${TAG}.md"
+
+          if [ ! -f "$NOTES" ]; then
+            echo "Missing release notes: $NOTES" >&2
+            exit 1
+          fi
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "DockerForge ${TAG}" --notes-file "$NOTES" --latest
+          else
+            gh release create "$TAG" --title "DockerForge ${TAG}" --notes-file "$NOTES" --latest
+          fi

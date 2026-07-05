@@ -1,6 +1,6 @@
 {
   "name": "@dockerforge/cli",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DockerForge CLI: generate production-grade Dockerfiles, .dockerignore, and Compose from a local project, and lint Dockerfiles (human/JSON/SARIF). Offline.",
   "license": "Apache-2.0",
   "author": "Docker Forge",
@@ -44,7 +44,7 @@
     "sarif"
   ],
   "dependencies": {
-    "@dockerforge/core": "0.2.1",
+    "@dockerforge/core": "0.2.2",
     "commander": "^13.1.0"
   }
 }

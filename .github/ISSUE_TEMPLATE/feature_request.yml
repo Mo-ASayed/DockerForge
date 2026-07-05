@@ -1,0 +1,39 @@
+name: Feature request
+description: Suggest an improvement for DockerForge
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem would this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should DockerForge do?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dockerfile generation
+        - Lint rules
+        - CLI output
+        - Programmatic API
+        - Documentation
+        - Release or packaging
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Examples
+      description: Link to similar tools, Dockerfile examples, or projects this should support.

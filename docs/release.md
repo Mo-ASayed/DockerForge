@@ -43,6 +43,20 @@ npm publish
 Do not publish from a dirty worktree unless the uncommitted changes are intentionally part of the
 release candidate and have passed `npm run verify`.
 
+## GitHub Releases
+
+Each release should have notes under `docs/release-notes/vX.Y.Z.md`, matching the package version.
+
+The GitHub Release workflow publishes the npm packages, creates the matching git tag if needed, and
+creates or updates the GitHub release from that notes file.
+
+Before running the workflow, make sure:
+
+- the version is updated in the root package and both workspaces;
+- the matching release notes file exists;
+- `npm run verify` passes locally;
+- the changes are committed and pushed to `main`.
+
 ## Trusted Publishing
 
 The release workflow is prepared for npm trusted publishing with provenance. Configure trusted

@@ -1,0 +1,57 @@
+name: Bug report
+description: Report a DockerForge problem
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a problem. Clear reproductions are the fastest way to get a fix.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Run `dockerforge --version` or `npx @dockerforge/cli --version`.
+      placeholder: "0.2.2"
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: Paste the exact command you ran.
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should DockerForge have done?
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Link to a small repo or paste the minimum files needed to reproduce the issue.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include Node, npm, OS, and Docker versions where relevant.
+      render: text
