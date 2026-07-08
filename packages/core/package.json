@@ -1,6 +1,6 @@
 {
   "name": "@dockerforge/core",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "DockerForge engine: analyse a local project and generate production-grade Dockerfiles, .dockerignore, and Compose, and lint Dockerfiles. Offline, no network.",
   "license": "Apache-2.0",
   "author": "Docker Forge",
