@@ -1,6 +1,6 @@
 {
   "name": "dockerforge",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DockerForge open-source core and CLI: generate and lint production-grade Dockerfiles.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/Mo-ASayed/DockerForge",
@@ -48,6 +48,6 @@
     "verify": "node scripts/verify-release.js"
   },
   "dependencies": {
-    "@dockerforge/cli": "0.2.2"
+    "@dockerforge/cli": "0.2.3"
   }
 }
