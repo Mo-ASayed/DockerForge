@@ -15,6 +15,7 @@ const ROOT_PACKAGE = path.join(ROOT, 'package.json');
 const CLI_PACKAGE = path.join(ROOT, 'packages', 'cli', 'package.json');
 const CORE_PACKAGE = path.join(ROOT, 'packages', 'core', 'package.json');
 const VERIFY_SCRIPT = path.join(ROOT, 'scripts', 'verify-release.js');
+const RELEASE_WORKFLOW = path.join(ROOT, '.github', 'workflows', 'release.yml');
 
 async function readJson(file) {
   return JSON.parse(await fs.readFile(file, 'utf8'));
@@ -86,6 +87,13 @@ test('release pack parser accepts npm 12 object-shaped JSON output', async () =>
 
   assert.equal(result.name, 'dockerforge');
   assert.equal(result.files.length, 2);
+});
+
+test('release workflow pins npm instead of installing latest', async () => {
+  const workflow = await fs.readFile(RELEASE_WORKFLOW, 'utf8');
+
+  assert.match(workflow, /npm install -g npm@11\.12\.1/);
+  assert.doesNotMatch(workflow, /npm install -g npm@latest/);
 });
 
 test('release smoke script can verify packed tarballs without recursively running tests', async () => {
