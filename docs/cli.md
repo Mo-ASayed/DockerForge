@@ -29,6 +29,9 @@ Options:
 
 `path` defaults to the current directory.
 
+Running `dockerforge` without a subcommand prints help and does not generate files. Use
+`dockerforge generate .` when you want to write Docker assets for the current directory.
+
 ## generate
 
 Analyse a project directory and produce a Dockerfile, a `.dockerignore`, and a Compose file.

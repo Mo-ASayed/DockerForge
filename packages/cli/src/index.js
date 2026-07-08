@@ -37,7 +37,7 @@ program
   .version(version, '-v, --version');
 
 program
-  .command('generate', { isDefault: true })
+  .command('generate')
   .description('Generate a Dockerfile, .dockerignore, and Compose for a local project directory')
   .argument('[path]', 'Target project directory', '.')
   .option('-o, --output <dir>', 'Write output to this directory (default: same as [path])')
@@ -214,4 +214,9 @@ function printLintHuman(result) {
   console.log('');
 }
 
-program.parseAsync(process.argv);
+if (process.argv.length <= 2) {
+  program.outputHelp();
+  process.exitCode = 1;
+} else {
+  program.parseAsync(process.argv);
+}

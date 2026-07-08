@@ -51,6 +51,80 @@ test('generate --json emits a Dockerfile and confidence', async () => {
   assert.ok(out.dockerignore && out.dockerignore.length > 0, 'should contain a .dockerignore');
 });
 
+test('bare dockerforge shows help and does not generate files', async () => {
+  const appDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dockerforge-bare-'));
+  try {
+    await fs.writeFile(path.join(appDir, 'package.json'), JSON.stringify({
+      name: 'bare-command-test',
+      version: '1.0.0',
+      scripts: { start: 'node index.js' },
+      dependencies: { express: '^4.18.2' },
+    }, null, 2));
+    await fs.writeFile(path.join(appDir, 'package-lock.json'), JSON.stringify({
+      name: 'bare-command-test',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'bare-command-test',
+          version: '1.0.0',
+          dependencies: { express: '^4.18.2' },
+        },
+      },
+    }, null, 2));
+    await fs.writeFile(path.join(appDir, 'index.js'), 'require("express")().listen(3000);\n');
+
+    await assert.rejects(
+      run('node', [CLI], { cwd: appDir, env: { ...process.env, NO_COLOR: '1' } }),
+      (err) => err.code === 1 && /Usage: dockerforge/.test(String(err.stdout))
+    );
+
+    await assert.rejects(fs.access(path.join(appDir, 'Dockerfile')));
+    await assert.rejects(fs.access(path.join(appDir, '.dockerignore')));
+    await assert.rejects(fs.access(path.join(appDir, 'docker-compose.yml')));
+  } finally {
+    await fs.rm(appDir, { recursive: true, force: true });
+  }
+});
+
+test('path without generate is rejected and does not generate files', async () => {
+  const appDir = await fs.mkdtemp(path.join(os.tmpdir(), 'dockerforge-path-'));
+  try {
+    await fs.writeFile(path.join(appDir, 'package.json'), JSON.stringify({
+      name: 'path-command-test',
+      version: '1.0.0',
+      scripts: { start: 'node index.js' },
+      dependencies: { express: '^4.18.2' },
+    }, null, 2));
+    await fs.writeFile(path.join(appDir, 'package-lock.json'), JSON.stringify({
+      name: 'path-command-test',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'path-command-test',
+          version: '1.0.0',
+          dependencies: { express: '^4.18.2' },
+        },
+      },
+    }, null, 2));
+    await fs.writeFile(path.join(appDir, 'index.js'), 'require("express")().listen(3000);\n');
+
+    await assert.rejects(
+      run('node', [CLI, '.'], { cwd: appDir, env: { ...process.env, NO_COLOR: '1' } }),
+      (err) => err.code === 1 && /unknown command/i.test(String(err.stderr))
+    );
+
+    await assert.rejects(fs.access(path.join(appDir, 'Dockerfile')));
+    await assert.rejects(fs.access(path.join(appDir, '.dockerignore')));
+    await assert.rejects(fs.access(path.join(appDir, 'docker-compose.yml')));
+  } finally {
+    await fs.rm(appDir, { recursive: true, force: true });
+  }
+});
+
 test('generate --pin-digests prints digest-pinned Docker Hub base images', async () => {
   const digest = `sha256:${'e'.repeat(64)}`;
   const { stdout } = await run('node', [CLI, 'generate', FIXTURE, '--print', '--pin-digests'], {

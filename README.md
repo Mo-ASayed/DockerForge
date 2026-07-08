@@ -61,6 +61,9 @@ cd ./my-app
 npx @dockerforge/cli generate .
 ```
 
+DockerForge requires an explicit subcommand. A bare `dockerforge` command prints help and does
+not write files.
+
 DockerForge writes:
 
 ```text
