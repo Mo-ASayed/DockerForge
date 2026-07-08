@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const fs = require('node:fs/promises');
+const vm = require('node:vm');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 
@@ -17,6 +18,22 @@ const VERIFY_SCRIPT = path.join(ROOT, 'scripts', 'verify-release.js');
 
 async function readJson(file) {
   return JSON.parse(await fs.readFile(file, 'utf8'));
+}
+
+async function loadVerifyReleaseInternals() {
+  const source = await fs.readFile(VERIFY_SCRIPT, 'utf8');
+  const instrumented = source.replace(/\nmain\(\);\s*$/, '\nmodule.exports = { parsePackJson };\n');
+  const module = { exports: {} };
+  vm.runInNewContext(instrumented, {
+    require,
+    module,
+    exports: module.exports,
+    __dirname: path.dirname(VERIFY_SCRIPT),
+    __filename: VERIFY_SCRIPT,
+    process,
+    console,
+  }, { filename: VERIFY_SCRIPT });
+  return module.exports;
 }
 
 test('root package exposes release-quality verification scripts', async () => {
@@ -48,6 +65,27 @@ test('published packages declare the intended public surfaces', async () => {
   assert.equal(corePkg.main, 'src/index.js');
   assert.equal(corePkg.exports?.['.'], './src/index.js');
   assert.equal(corePkg.bugs?.url, 'https://github.com/Mo-ASayed/DockerForge/issues');
+});
+
+test('release pack parser accepts npm 12 object-shaped JSON output', async () => {
+  const { parsePackJson } = await loadVerifyReleaseInternals();
+  const result = parsePackJson(JSON.stringify({
+    dockerforge: {
+      id: 'dockerforge@0.2.5',
+      name: 'dockerforge',
+      version: '0.2.5',
+      filename: 'dockerforge-0.2.5.tgz',
+      files: [
+        { path: 'package.json', size: 1260, mode: 420 },
+        { path: 'bin/dockerforge.js', size: 64, mode: 420 },
+      ],
+      entryCount: 2,
+      unpackedSize: 1324,
+    },
+  }), 'root');
+
+  assert.equal(result.name, 'dockerforge');
+  assert.equal(result.files.length, 2);
 });
 
 test('release smoke script can verify packed tarballs without recursively running tests', async () => {

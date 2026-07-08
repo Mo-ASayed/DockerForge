@@ -85,14 +85,15 @@ function npx(commandArgs, options) {
 
 function parsePackJson(stdout, label) {
   const parsed = JSON.parse(stdout);
-  assert.ok(Array.isArray(parsed), `${label}: npm pack --json should return an array`);
-  assert.equal(parsed.length, 1, `${label}: expected one packed package`);
-  assert.ok(parsed[0].files.length > 0, `${label}: packed package should contain files`);
-  for (const file of parsed[0].files) {
+  const entries = Array.isArray(parsed) ? parsed : Object.values(parsed || {});
+  assert.ok(Array.isArray(entries), `${label}: npm pack --json should return package metadata`);
+  assert.equal(entries.length, 1, `${label}: expected one packed package`);
+  assert.ok(entries[0].files.length > 0, `${label}: packed package should contain files`);
+  for (const file of entries[0].files) {
     assert.ok(!file.path.includes('node_modules'), `${label}: tarball must not include node_modules`);
     assert.ok(!file.path.endsWith('.tgz'), `${label}: tarball must not include generated tarballs`);
   }
-  return parsed[0];
+  return entries[0];
 }
 
 function dryRunPack() {
