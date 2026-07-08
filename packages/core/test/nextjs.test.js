@@ -90,3 +90,48 @@ test('Next.js without standalone falls back to copying production node_modules',
   assert.ok(!df.includes('/.next/standalone'), 'non-standalone app should not use the standalone bundle');
   assert.ok(df.includes('COPY --from=builder /app/node_modules ./node_modules'), 'non-standalone runtime copies production node_modules');
 });
+
+test('Next.js root app is not displaced by Terraform cache modules', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'dockerforge-next-terraform-'));
+  try {
+    await fs.writeFile(path.join(dir, 'package-lock.json'), JSON.stringify({
+      name: 'next-with-terraform-cache',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'next-with-terraform-cache',
+          version: '1.0.0',
+          dependencies: { next: '15.0.0', react: '^19.0.0', 'react-dom': '^19.0.0' },
+        },
+      },
+    }, null, 2));
+    await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({
+      name: 'next-with-terraform-cache',
+      private: true,
+      scripts: { build: 'next build', start: 'next start' },
+      dependencies: { next: '15.0.0', react: '^19.0.0', 'react-dom': '^19.0.0' },
+    }, null, 2));
+    await fs.writeFile(path.join(dir, 'next.config.ts'), 'export default {};\n');
+    await fs.mkdir(path.join(dir, 'src', 'app'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'src', 'app', 'page.tsx'), 'export default function Page(){return null;}\n');
+
+    const moduleDir = path.join(dir, 'terraform', '.terraform', 'modules', 'naming');
+    await fs.mkdir(moduleDir, { recursive: true });
+    await fs.writeFile(path.join(moduleDir, 'go.mod'), 'module github.com/acme/terraform-naming\n\ngo 1.23\n');
+    await fs.writeFile(path.join(moduleDir, 'main.go'), 'package main\nfunc main(){}\n');
+
+    const projectPath = await core.ingestLocal(dir);
+    const result = await core.runDockerfileEngine({ projectPath });
+    const df = result.dockerfile;
+
+    assert.equal(result.analysis.services.length, 1);
+    assert.equal(result.analysis.services[0].stack, 'node');
+    assert.equal(result.analysis.services[0].serviceDir, '.', 'the frontend root should remain the service');
+    assert.ok(df.includes('COPY src/ ./src/'), 'should generate the Next.js root Dockerfile');
+    assert.ok(!df.includes('terraform/.terraform/modules'), 'must not build cached Terraform modules');
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});

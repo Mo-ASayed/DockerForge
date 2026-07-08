@@ -43,7 +43,7 @@ function safeGoBuildTarget(target) {
 
 // Dirs that are never service roots
 const SKIP_DIRS = new Set([
-  'node_modules', '.git', '.next', '.nuxt', 'dist', 'build',
+  'node_modules', '.git', '.terraform', '.next', '.nuxt', 'dist', 'build',
   'target', 'vendor', // rust build output / go vendored deps
   '__pycache__', '.pytest_cache', 'bin', 'obj', 'coverage',
   '.venv', 'venv', 'env', '.env', '.idea', '.vscode',
@@ -383,7 +383,7 @@ async function detectRole(serviceDir, pkg) {
 const NON_DEPLOYABLE_PATH_PARTS = new Set([
   '__tests__', '__mocks__', 'test', 'tests', 'fixtures', 'spec', 'specs',
   'examples', 'example', 'samples', 'sample', 'demos', 'demo',
-  'docs', 'doc', 'dev-docs', 'documentation',
+  'docs', 'doc', 'dev-docs', 'documentation', '.terraform',
 ]);
 
 // ── Workspace Member Discovery ───────────────────────────────────────────────
@@ -1482,7 +1482,7 @@ function getFileList(projectPath) {
     nodir: false,
     absolute: true,
     ignore: [
-      '**/node_modules/**', '**/.git/**', '**/bin/**', '**/obj/**',
+      '**/node_modules/**', '**/.git/**', '**/.terraform/**', '**/bin/**', '**/obj/**',
       '**/target/**', '**/vendor/**',
       '**/__tests__/**', '**/__mocks__/**', '**/test/**', '**/tests/**',
       '**/fixtures/**', '**/spec/**', '**/specs/**',
