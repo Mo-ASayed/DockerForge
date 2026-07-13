@@ -1,6 +1,6 @@
 # DockerForge
 
-Generate and lint production-grade Dockerfiles from the command line. Offline by default, no account required.
+Generate secure, review-ready Dockerfiles and lint existing Docker configurations.
 
 [![npm cli](https://img.shields.io/npm/v/@dockerforge/cli?label=%40dockerforge%2Fcli)](https://www.npmjs.com/package/@dockerforge/cli)
 [![npm core](https://img.shields.io/npm/v/@dockerforge/core?label=%40dockerforge%2Fcore)](https://www.npmjs.com/package/@dockerforge/core)
